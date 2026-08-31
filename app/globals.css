@@ -19,4 +19,3 @@ body{background:radial-gradient(circle at 10% 0%,rgba(79,70,229,.18),transparent
 @media(max-width:1150px){.balance-panel{grid-template-columns:1fr}.balance-copy{min-height:360px}.task-fields{grid-template-columns:1fr 1fr 1fr}.task-fields label:nth-child(2){grid-column:span 2}}
 @media(max-width:760px){body{background-attachment:scroll}.sidebar{background:#0b1120}.balance-copy{min-height:350px}.balance-wheel{width:205px;height:205px}.sphere-grid{grid-template-columns:1fr}.sphere-card{min-height:92px}.task-fields{grid-template-columns:1fr 1fr}.task-fields label:nth-child(2){grid-column:span 1}.task-fields label:first-child,.task-fields label:nth-child(2),.task-fields label:nth-child(3){grid-column:span 2}.task-row .status{margin-left:67px}.sphere-card:hover,.stat:hover{transform:none}}
 .task-fields .field-label{display:flex;flex-direction:column;gap:7px;color:#8491a7;font-size:10px;font-weight:650;letter-spacing:.04em}
-
