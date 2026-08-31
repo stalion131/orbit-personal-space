@@ -1,12 +1,13 @@
 export const statuses = { pending: 'Ожидает', running: 'В работе', approval: 'Ждёт решения', completed: 'Завершена', error: 'Ошибка' } as const;
 export type Status = keyof typeof statuses;
 export const spheres = [
-  { id: 'work', name: 'Работа', color: '#fc4c02', subcategories: ['Лаборатория Комнатного', 'Сфера строительства'] },
-  { id: 'personal', name: 'Личные задачи', color: '#a78bfa', subcategories: [] },
+  { id: 'work', name: 'Работа', color: '#fc4c02', subcategories: ['Лаборатория Комнатного', 'Сфера строительства', 'Сфера строительства / Текущие проекты'] },
+  { id: 'personal', name: 'Личные задачи', color: '#a78bfa', subcategories: ['Квартира'] },
   { id: 'travel', name: 'Путешествия', color: '#38bdf8', subcategories: ['Поиск и бронирование билетов', 'Составление маршрутов', 'Покупка и бронирование билетов'] },
   { id: 'fitness', name: 'Тренировки и питание', color: '#22c55e', subcategories: [] },
   { id: 'learning', name: 'Обучение и развитие', color: '#818cf8', subcategories: [] },
   { id: 'shopping', name: 'Покупки', color: '#f59e0b', subcategories: [] },
+  { id: 'meetings', name: 'Встречи', color: '#f43f5e', subcategories: [] },
 ] as const;
 export type SphereId = (typeof spheres)[number]['id'];
 export const priorities = ['low', 'medium', 'high', 'critical'] as const;
