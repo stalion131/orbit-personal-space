@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { TaskError, type Task } from './tasks';
+import { hydrateTask, TaskError, type Task } from './tasks';
 
 type TaskRow = { payload: Task };
 
@@ -11,13 +11,14 @@ function databaseError(message: string, code?: string) {
 export async function listCloudTasks(client: SupabaseClient): Promise<Task[]> {
   const { data, error } = await client.from('orbit_tasks').select('payload').order('updated_at', { ascending: false }).order('id');
   if (error) throw databaseError('Не удалось получить задачи из Supabase.', error.code);
-  return ((data ?? []) as TaskRow[]).map(row => row.payload);
+  return ((data ?? []) as TaskRow[]).map(row => hydrateTask(row.payload));
 }
 
 export async function getCloudTask(client: SupabaseClient, id: string): Promise<Task | null> {
   const { data, error } = await client.from('orbit_tasks').select('payload').eq('id', id).maybeSingle();
   if (error) throw databaseError('Не удалось получить задачу из Supabase.', error.code);
-  return (data as TaskRow | null)?.payload ?? null;
+  const task = (data as TaskRow | null)?.payload;
+  return task ? hydrateTask(task) : null;
 }
 
 export async function insertCloudTask(client: SupabaseClient, ownerId: string, task: Task): Promise<Task> {

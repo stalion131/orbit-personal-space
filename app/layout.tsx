@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import './notebook.css';
 import { PwaInstall } from '@/components/pwa-install';
 const title = 'Orbit — ваше рабочее пространство';
 const description = 'Задачи, решения и история действий в одном личном пространстве.';

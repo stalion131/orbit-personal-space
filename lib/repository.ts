@@ -1,4 +1,4 @@
-import { TaskError, type Task } from './tasks';
+import { hydrateTask, TaskError, type Task } from './tasks';
 
 // Supabase is the only persistent store in Vercel. This small in-memory mode
 // keeps local UI development possible when no .env.local is configured.
@@ -9,11 +9,11 @@ export async function listTasks(demo: boolean): Promise<Task[]> {
   return [...localTasks.values()]
     .filter(task => task.demo === demo)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id))
-    .map(clone);
+    .map(task => hydrateTask(clone(task)));
 }
 export async function getTask(id: string): Promise<Task | null> {
   const task = localTasks.get(id);
-  return task ? clone(task) : null;
+  return task ? hydrateTask(clone(task)) : null;
 }
 export async function insertTask(task: Task): Promise<Task> {
   const saved = localTasks.get(task.id);
