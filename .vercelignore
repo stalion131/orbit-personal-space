@@ -1,0 +1,10 @@
+node_modules
+.next
+.git
+.vinext
+.wrangler
+dist
+outputs
+work
+.dev.vars
+.env.local
