@@ -2,18 +2,21 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ArrowUpRight, ArrowUp, Bot, CalendarDays, Check, CheckCheck, Command, Download, GraduationCap, LayoutDashboard, ListTodo, LoaderCircle, Mail, Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Workflow, X, Plane, Briefcase, UserRound, Clock3 } from 'lucide-react';
+import { ArrowUpRight, ArrowUp, Bot, CalendarDays, Check, CheckCheck, Command, Download, GraduationCap, LayoutDashboard, ListTodo, LoaderCircle, LogOut, Mail, Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Upload, Workflow, X, Plane, Briefcase, UserRound, Clock3 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { LoginScreen } from '@/components/login-screen';
 import { priorities, spheres, statuses, type Priority, type SphereId, type Operation, type Status, type Task } from '@/lib/tasks';
+import { useOrbitSession } from '@/lib/use-orbit-session';
 
 const sphereIcons = { work: Briefcase, personal: UserRound, travel: Plane, fitness: Workflow, learning: GraduationCap, shopping: ListTodo, meetings: CalendarDays };
 const priorityLabels = {low:'Низкий',medium:'Средний',high:'Высокий',critical:'Критический'};
-async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
+async function api<T>(path: string, options: RequestInit = {}, accessToken: string | null = null): Promise<T> {
   const headers = new Headers(options.headers); headers.set('Content-Type', 'application/json'); headers.set('X-Orbit-Client', 'dashboard');
+  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
   const response = await fetch(path, { ...options, cache: 'no-store', headers });
   const value = await response.json() as {error?: string};
   if (!response.ok) throw new Error(value.error || 'Не удалось выполнить запрос.');
@@ -23,6 +26,7 @@ function date(value: string) { return new Date(value).toLocaleString('ru-RU', {d
 function StatusPill({status}: {status: Status}) {return <span className={`status ${status}`}><i/>{statuses[status]}</span>;}
 
 export default function Home() {
+  const access = useOrbitSession();
   const [draft, setDraft] = useState('');
   const [sphere, setSphere] = useState<SphereId>('work');
   const [subcategory, setSubcategory] = useState('Лаборатория Комнатного');
@@ -43,19 +47,24 @@ export default function Home() {
   const [info, setInfo] = useState<'agents' | 'about' | null>(null);
   const requestId = useRef<string | null>(null);
   const draftRef = useRef<HTMLTextAreaElement>(null);
+  const importRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    if (access.loading || (access.mode === 'supabase' && !access.accessToken)) return;
     const controller = new AbortController();
     async function load() {
       try {
-        const result = await api<{tasks: Task[]}>('/api/tasks', {signal: controller.signal});
+        const result = await api<{tasks: Task[]}>('/api/tasks', {signal: controller.signal}, access.accessToken);
         if (!controller.signal.aborted) setTasks(result.tasks);
       } catch (err) { if (!controller.signal.aborted) setError(err instanceof Error ? err.message : 'Нет соединения с сервером.'); }
       finally { if (!controller.signal.aborted) setLoading(false); }
     }
     void load();
     return () => controller.abort();
-  }, [refresh]);
+  }, [refresh, access.loading, access.mode, access.accessToken]);
+
+  if (access.loading) return <main className="auth-shell"><div className="auth-loading"><LoaderCircle className="spin"/><span>Открываем личное пространство…</span></div></main>;
+  if (access.error || (access.mode === 'supabase' && !access.accessToken)) return <LoginScreen onSignIn={access.signIn} onSignUp={access.signUp} setupError={access.error}/>;
 
   const selectedTask = tasks.find(task => task.id === selected);
   const approvals = tasks.filter(task => task.status === 'approval');
@@ -68,7 +77,7 @@ export default function Home() {
     setBusy(true); setError(''); setNotice('');
     requestId.current ??= crypto.randomUUID();
     try {
-      const {task} = await api<{task:Task}>('/api/tasks', {method:'POST', body:JSON.stringify({id:requestId.current,description:draft,sphere,subcategory,dueDate:dueDate||null,queue,priority})});
+      const {task} = await api<{task:Task}>('/api/tasks', {method:'POST', body:JSON.stringify({id:requestId.current,description:draft,sphere,subcategory,dueDate:dueDate||null,queue,priority})}, access.accessToken);
       setTasks(current=>[task,...current.filter(item=>item.id!==task.id)]);
       navigate('overview'); setDraft(''); requestId.current=null; setRefresh(value=>value+1);
       setNotice('Задача сохранена. Она ожидает подключения оркестратора; автоматическое выполнение пока отключено.');
@@ -79,7 +88,7 @@ export default function Home() {
     if (busy) return;
     setBusy(true); setError(''); setNotice('');
     try {
-      const result = await api<{task:Task}>(`/api/tasks/${encodeURIComponent(task.id)}`, {method:'PATCH', body:JSON.stringify({...operation, revision:task.revision})});
+      const result = await api<{task:Task}>(`/api/tasks/${encodeURIComponent(task.id)}`, {method:'PATCH', body:JSON.stringify({...operation, revision:task.revision})}, access.accessToken);
       setTasks(current=>current.map(item=>item.id===task.id?result.task:item));
       setNotice(result.task.result || 'Изменение сохранено.');
     } catch(err) {setError(err instanceof Error ? err.message : 'Не удалось записать решение.');}
@@ -88,6 +97,17 @@ export default function Home() {
   function exportTasks() {
     const blob = new Blob([JSON.stringify({format:'orbit-tasks-v1', exportedAt:new Date().toISOString(), tasks},null,2)],{type:'application/json'});
     const url=URL.createObjectURL(blob); const link=document.createElement('a'); link.href=url; link.download='orbit-tasks.json'; link.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+  async function importTasks(file: File | undefined) {
+    if (!file || busy) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      if (file.size > 2_000_000) throw new Error('Файл больше 2 МБ. Выберите резервную копию Orbit.');
+      const backup = JSON.parse(await file.text()) as unknown;
+      const result = await api<{imported:number}>('/api/import', {method:'POST', body:JSON.stringify(backup)}, access.accessToken);
+      setNotice(`Перенесено задач: ${result.imported}.`); setRefresh(value=>value+1);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось перенести резервную копию.'); }
+    finally { setBusy(false); if (importRef.current) importRef.current.value = ''; }
   }
   const stats = [
     {icon:ListTodo,label:'Всего задач',value:tasks.length,caption:'Во всех сферах жизни',filter:'all'},
@@ -107,13 +127,13 @@ export default function Home() {
       </nav>
       <div className="workspace-label section-label">СИСТЕМА</div>
       <nav aria-label="Информация о системе"><Button className="nav-item" variant="ghost" onClick={()=>setInfo('agents')}><Bot/>Агенты</Button><Button className="nav-item" variant="ghost" onClick={()=>setInfo('about')}><Settings2/>О прототипе</Button></nav>
-      <div className="sidebar-bottom"><div className="safe-note"><ShieldCheck size={19}/><strong>Вы управляете решениями</strong><p>Важные действия — только<br/>с вашего подтверждения.</p></div><div className="profile"><span className="avatar">В</span><div><strong>Моё пространство</strong><small>Локальный прототип · v0.1</small></div></div></div>
+      <div className="sidebar-bottom"><div className="safe-note"><ShieldCheck size={19}/><strong>Вы управляете решениями</strong><p>Важные действия — только<br/>с вашего подтверждения.</p></div><div className="profile"><span className="avatar">В</span><div><strong>{access.email || 'Моё пространство'}</strong><small>{access.mode==='supabase'?'Защищённое облако · v0.2':'Локальный режим · v0.2'}</small></div>{access.mode==='supabase'&&<Button variant="ghost" size="icon" aria-label="Выйти" onClick={()=>void access.signOut()}><LogOut size={14}/></Button>}</div></div>
     </aside>
-    <div className="main-shell"><header className="topbar"><div>Рабочее пространство <span>/</span> <strong>{view==='overview'?'Обзор':view==='tasks'?'Все задачи':'Подтверждения'}</strong></div><span className="local-status"><i/>Локальный режим</span></header>
+    <div className="main-shell"><header className="topbar"><div>Рабочее пространство <span>/</span> <strong>{view==='overview'?'Обзор':view==='tasks'?'Все задачи':'Подтверждения'}</strong></div><span className="local-status"><i/>{access.mode==='supabase'?'Синхронизация включена':'Локальный режим'}</span></header>
       <main className="main-content">
         <div className="heading-row"><div><div className="eyebrow">МЕНЬШЕ РУТИНЫ. БОЛЬШЕ ВАЖНОГО.</div><h1>{view==='overview'?'Всё под контролем':view==='tasks'?'Каждая задача на виду':'Решение за вами'}<span>.</span></h1><p>{view==='approvals'?'Проверьте предложение до того, как оно станет действием.':'Ваши задачи и решения — в одном пространстве.'}</p></div><Button className="primary-button" onClick={newTask}><Plus/>Новая задача</Button></div>
-        <div className="mode-row"><span/><Button variant="ghost" className="export-button" disabled={loading || !tasks.length} onClick={exportTasks}><Download size={14}/>Экспорт</Button></div>
-        <div className="demo-banner real-banner"><Sparkles size={15}/><span>Ваши задачи сохраняются локально. ИИ-агенты и внешние действия пока отключены.</span><span className="demo-label">MVP</span></div>
+        <div className="mode-row"><span/><div className="data-actions"><input ref={importRef} className="visually-hidden" type="file" accept="application/json,.json" onChange={event=>void importTasks(event.target.files?.[0])}/><Button variant="ghost" className="export-button" disabled={busy} onClick={()=>importRef.current?.click()}><Upload size={14}/>Импорт</Button><Button variant="ghost" className="export-button" disabled={loading || !tasks.length} onClick={exportTasks}><Download size={14}/>Экспорт</Button></div></div>
+        <div className="demo-banner real-banner"><Sparkles size={15}/><span>{access.mode==='supabase'?'Задачи синхронизируются между вашими устройствами.':'Ваши задачи сохраняются локально.'} ИИ-агенты и внешние действия пока отключены.</span><span className="demo-label">MVP</span></div>
         {error && <div className="message error-message" role="alert"><span>{error}</span><Button variant="outline" onClick={()=>setRefresh(v=>v+1)} disabled={busy}><RefreshCw size={14}/>Обновить</Button></div>}
         {notice && <output className="message success-message"><Check size={16}/><span>{notice}</span><Button variant="ghost" size="icon" aria-label="Закрыть уведомление" onClick={()=>setNotice('')}><X size={14}/></Button></output>}
         {view==='overview' && <BalanceWheel tasks={tasks} loading={loading} onSelect={id=>{setView('tasks');setSphereFilter(id);setStatusFilter('all');setQuery('');}}/>}
@@ -127,7 +147,7 @@ export default function Home() {
           <div className="section-heading"><h2>{view==='approvals'?'Ожидают решения':'Мои задачи'} <span>{filtered.length}</span></h2><Button variant="ghost" onClick={()=>setRefresh(v=>v+1)} disabled={loading||busy} aria-label="Обновить задачи"><RefreshCw size={14} className={loading?'spin':''}/></Button></div>
           <div className="task-filters"><NativeSelect aria-label="Фильтр по статусу" size="sm" value={statusFilter} disabled={view==='approvals'} onChange={e=>setStatusFilter(e.target.value as Status|'all')}><NativeSelectOption value="all">Все статусы</NativeSelectOption>{Object.entries(statuses).map(([value,label])=><NativeSelectOption key={value} value={value}>{label}</NativeSelectOption>)}</NativeSelect><NativeSelect aria-label="Фильтр по сфере" size="sm" value={sphereFilter} onChange={e=>setSphereFilter(e.target.value)}><NativeSelectOption value="all">Все сферы</NativeSelectOption>{spheres.map(item=><NativeSelectOption key={item.id} value={item.id}>{item.name}</NativeSelectOption>)}</NativeSelect><div className="search-box"><Search size={15}/><Input aria-label="Поиск задач" placeholder="Найти задачу" value={query} onChange={e=>setQuery(e.target.value)}/></div></div>
           <div className="task-list" aria-busy={loading}>
-            {loading && !tasks.length?<div className="empty-state"><LoaderCircle size={24} className="spin"/><h3>Загружаем пространство</h3><p>Получаем задачи из локальной базы.</p></div>:!filtered.length?<div className="empty-state"><ListTodo size={30}/><h3>{tasks.length?'Ничего не найдено':'Место для ваших планов'}</h3><p>{tasks.length?'Попробуйте изменить поиск или фильтры.':'Добавьте первую задачу обычными словами.'}</p><Button variant="outline" onClick={tasks.length?()=>navigate(view):newTask}>{tasks.length?'Сбросить фильтры':'Добавить задачу'}</Button></div>:filtered.map(task=>{const Icon=sphereIcons[task.sphere];const sphereInfo=spheres.find(item=>item.id===task.sphere)!;return <button className="task-row" key={task.id} onClick={()=>setSelected(task.id)}><span className={`task-icon ${task.status}`} style={{color:sphereInfo.color}}><Icon size={18}/></span><span className="queue-number">{task.queue}</span><div className="task-info"><strong>{task.title}</strong><small>{sphereInfo.name}{task.subcategory?` · ${task.subcategory}`:''} · Локально</small><div className="task-attributes"><span className={`priority ${task.priority}`}>{priorityLabels[task.priority]}</span><span>до {task.dueDate?new Date(`${task.dueDate}T00:00:00`).toLocaleDateString('ru-RU',{day:'numeric',month:'short'}):'без срока'}</span></div></div><StatusPill status={task.status}/><ArrowUpRight size={16} className="row-arrow"/></button>;})}
+            {loading && !tasks.length?<div className="empty-state"><LoaderCircle size={24} className="spin"/><h3>Загружаем пространство</h3><p>Получаем ваши задачи.</p></div>:!filtered.length?<div className="empty-state"><ListTodo size={30}/><h3>{tasks.length?'Ничего не найдено':'Место для ваших планов'}</h3><p>{tasks.length?'Попробуйте изменить поиск или фильтры.':'Добавьте первую задачу или импортируйте резервную копию.'}</p><Button variant="outline" onClick={tasks.length?()=>navigate(view):newTask}>{tasks.length?'Сбросить фильтры':'Добавить задачу'}</Button></div>:filtered.map(task=>{const Icon=sphereIcons[task.sphere];const sphereInfo=spheres.find(item=>item.id===task.sphere)!;return <button className="task-row" key={task.id} onClick={()=>setSelected(task.id)}><span className={`task-icon ${task.status}`} style={{color:sphereInfo.color}}><Icon size={18}/></span><span className="queue-number">{task.queue}</span><div className="task-info"><strong>{task.title}</strong><small>{sphereInfo.name}{task.subcategory?` · ${task.subcategory}`:''} · {access.mode==='supabase'?'Синхронизировано':'Локально'}</small><div className="task-attributes"><span className={`priority ${task.priority}`}>{priorityLabels[task.priority]}</span><span>до {task.dueDate?new Date(`${task.dueDate}T00:00:00`).toLocaleDateString('ru-RU',{day:'numeric',month:'short'}):'без срока'}</span></div></div><StatusPill status={task.status}/><ArrowUpRight size={16} className="row-arrow"/></button>;})}
           </div>
           <div className="list-footnote"><Clock3 size={12}/>Новые задачи ждут подключения OpenAI Agents SDK.</div>
         </section>

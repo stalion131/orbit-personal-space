@@ -17,10 +17,38 @@ export type Proposal = { id: string; title: string; body: string; recipient: str
 export type Task = { id: string; title: string; description: string; sphere: SphereId; subcategory: string; dueDate: string | null; queue: number; priority: Priority; status: Status; demo: boolean; revision: number; createdAt: string; updatedAt: string; events: TaskEvent[]; result?: string; proposal?: Proposal };
 export type Operation = { op: 'simulate' | 'complete' } | { op: 'decision'; proposalId: string; decision: 'approved' | 'rejected' };
 export class TaskError extends Error { constructor(message: string, public status = 400) { super(message); } }
+function isRecord(value: unknown): value is Record<string, unknown> { return !!value && typeof value === 'object' && !Array.isArray(value); }
+function isIsoDate(value: unknown) { return typeof value === 'string' && !Number.isNaN(Date.parse(value)); }
+export function parseBackup(value: unknown): Task[] {
+  if (!isRecord(value) || value.format !== 'orbit-tasks-v1' || !Array.isArray(value.tasks)) throw new TaskError('Выберите резервную копию Orbit формата orbit-tasks-v1.');
+  if (!value.tasks.length || value.tasks.length > 500) throw new TaskError('Резервная копия должна содержать от 1 до 500 задач.');
+  const ids = new Set<string>();
+  return value.tasks.map((candidate, index) => {
+    if (!isRecord(candidate)) throw new TaskError(`Задача ${index + 1} имеет неверный формат.`);
+    const sphere = spheres.find(item => item.id === candidate.sphere);
+    const valid =
+      typeof candidate.id === 'string' && candidate.id.length >= 1 && candidate.id.length <= 120 &&
+      typeof candidate.title === 'string' && candidate.title.length >= 1 && candidate.title.length <= 110 &&
+      typeof candidate.description === 'string' && candidate.description.length >= 1 && candidate.description.length <= 5000 &&
+      !!sphere && typeof candidate.subcategory === 'string' && candidate.subcategory.length <= 100 &&
+      (candidate.subcategory === '' || sphere.subcategories.includes(candidate.subcategory as never)) &&
+      (candidate.dueDate === null || (typeof candidate.dueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(candidate.dueDate))) &&
+      Number.isInteger(candidate.queue) && Number(candidate.queue) >= 1 && Number(candidate.queue) <= 999 &&
+      priorities.includes(candidate.priority as Priority) && Object.hasOwn(statuses, String(candidate.status)) &&
+      Number.isSafeInteger(candidate.revision) && Number(candidate.revision) > 0 &&
+      isIsoDate(candidate.createdAt) && isIsoDate(candidate.updatedAt) && Array.isArray(candidate.events) && candidate.events.length <= 1000;
+    if (!valid) throw new TaskError(`Задача ${index + 1} не прошла проверку.`);
+    if (ids.has(candidate.id as string)) throw new TaskError(`В копии повторяется идентификатор задачи ${index + 1}.`);
+    ids.add(candidate.id as string);
+    const serialized = JSON.stringify(candidate);
+    if (serialized.length > 65536) throw new TaskError(`Задача ${index + 1} слишком большая.`);
+    return { ...candidate, demo: false } as Task;
+  });
+}
 export function event(title: string, detail: string, actor = 'Система'): TaskEvent { return { id: crypto.randomUUID(), at: new Date().toISOString(), title, detail, actor }; }
 export function createTask(id: string, description: string, sphere: SphereId, subcategory: string, dueDate: string | null, queue: number, priority: Priority, demo = false): Task {
   const now = new Date().toISOString();
-  return { id, title: description.split('\n')[0].slice(0, 110), description, sphere, subcategory, dueDate, queue, priority, demo, status: 'pending', revision: 1, createdAt: now, updatedAt: now, events: [event('Задача добавлена', demo ? 'Демонстрационный пример. Реальные инструменты не вызываются.' : 'Сохранена в локальной базе. Оркестратор ещё не подключён.', demo ? 'Демо' : 'Вы')] };
+  return { id, title: description.split('\n')[0].slice(0, 110), description, sphere, subcategory, dueDate, queue, priority, demo, status: 'pending', revision: 1, createdAt: now, updatedAt: now, events: [event('Задача добавлена', demo ? 'Демонстрационный пример. Реальные инструменты не вызываются.' : 'Сохранена в вашем пространстве. Оркестратор ещё не подключён.', demo ? 'Демо' : 'Вы')] };
 }
 export function transition(task: Task, operation: Operation): Task {
   const next = structuredClone(task);
