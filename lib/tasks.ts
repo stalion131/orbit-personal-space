@@ -1,99 +1,28 @@
 export const statuses = { pending: 'Ожидает', running: 'В работе', approval: 'Ждёт решения', completed: 'Завершена', error: 'Ошибка' } as const;
 export type Status = keyof typeof statuses;
-export const spheres = [
-  { id: 'work', name: 'Работа', color: '#fc4c02', subcategories: ['Лаборатория Комнатного', 'Сфера строительства', 'Сфера строительства / Текущие проекты'] },
-  { id: 'personal', name: 'Личные задачи', color: '#a78bfa', subcategories: ['Квартира'] },
-  { id: 'travel', name: 'Путешествия', color: '#38bdf8', subcategories: ['Поиск и бронирование билетов', 'Составление маршрутов', 'Покупка и бронирование билетов'] },
-  { id: 'fitness', name: 'Тренировки и питание', color: '#22c55e', subcategories: [] },
-  { id: 'learning', name: 'Обучение и развитие', color: '#818cf8', subcategories: [] },
-  { id: 'shopping', name: 'Покупки', color: '#f59e0b', subcategories: [] },
-  { id: 'meetings', name: 'Встречи', color: '#f43f5e', subcategories: [] },
-] as const;
-export type SphereId = (typeof spheres)[number]['id'];
 export const priorities = ['low', 'medium', 'high', 'critical'] as const;
 export type Priority = (typeof priorities)[number];
+export type Sphere = { id: string; name: string; color: string; order: number };
+export type Direction = { id: string; sphereId: string; name: string; order: number };
+export type Catalog = { revision: number; spheres: Sphere[]; directions: Direction[] };
+export const defaultCatalog: Catalog = { revision: 1, spheres: [['work','Работа','#fc4c02'],['personal','Личные задачи','#a78bfa'],['travel','Путешествия','#38bdf8'],['fitness','Тренировки и питание','#22c55e'],['learning','Обучение и развитие','#818cf8'],['shopping','Покупки','#f59e0b'],['meetings','Встречи','#f43f5e']].map(([id,name,color],order)=>({id,name,color,order})), directions: [['work-lab','work','Лаборатория Комнатного'],['work-build','work','Сфера строительства'],['work-projects','work','Текущие проекты'],['personal-flat','personal','Квартира'],['travel-search','travel','Поиск и бронирование билетов'],['travel-routes','travel','Составление маршрутов'],['travel-buy','travel','Покупка и бронирование билетов']].map(([id,sphereId,name],order)=>({id,sphereId,name,order})) };
+export function legacyDirectionId(sphere: string, subcategory: string) { const name = subcategory === 'Сфера строительства / Текущие проекты' ? 'Текущие проекты' : subcategory; return defaultCatalog.directions.find(item => item.sphereId === sphere && item.name === name)?.id; }
 export type TaskEvent = { id: string; at: string; title: string; detail: string; actor: string };
 export type Proposal = { id: string; title: string; body: string; recipient: string; cost: string; state: 'pending' | 'approved' | 'rejected'; decidedAt?: string };
-export type Task = { id: string; title: string; description: string; sphere: SphereId; subcategory: string; dueDate: string | null; queue: number; priority: Priority; status: Status; demo: boolean; revision: number; createdAt: string; updatedAt: string; events: TaskEvent[]; result?: string; proposal?: Proposal };
-export type Operation = { op: 'simulate' | 'complete' } | { op: 'decision'; proposalId: string; decision: 'approved' | 'rejected' };
-export class TaskError extends Error { constructor(message: string, public status = 400) { super(message); } }
-function isRecord(value: unknown): value is Record<string, unknown> { return !!value && typeof value === 'object' && !Array.isArray(value); }
-function isIsoDate(value: unknown) { return typeof value === 'string' && !Number.isNaN(Date.parse(value)); }
-export function parseBackup(value: unknown): Task[] {
-  if (!isRecord(value) || value.format !== 'orbit-tasks-v1' || !Array.isArray(value.tasks)) throw new TaskError('Выберите резервную копию Orbit формата orbit-tasks-v1.');
-  if (!value.tasks.length || value.tasks.length > 500) throw new TaskError('Резервная копия должна содержать от 1 до 500 задач.');
-  const ids = new Set<string>();
-  return value.tasks.map((candidate, index) => {
-    if (!isRecord(candidate)) throw new TaskError(`Задача ${index + 1} имеет неверный формат.`);
-    const sphere = spheres.find(item => item.id === candidate.sphere);
-    const valid =
-      typeof candidate.id === 'string' && candidate.id.length >= 1 && candidate.id.length <= 120 &&
-      typeof candidate.title === 'string' && candidate.title.length >= 1 && candidate.title.length <= 110 &&
-      typeof candidate.description === 'string' && candidate.description.length >= 1 && candidate.description.length <= 5000 &&
-      !!sphere && typeof candidate.subcategory === 'string' && candidate.subcategory.length <= 100 &&
-      (candidate.subcategory === '' || sphere.subcategories.includes(candidate.subcategory as never)) &&
-      (candidate.dueDate === null || (typeof candidate.dueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(candidate.dueDate))) &&
-      Number.isInteger(candidate.queue) && Number(candidate.queue) >= 1 && Number(candidate.queue) <= 999 &&
-      priorities.includes(candidate.priority as Priority) && Object.hasOwn(statuses, String(candidate.status)) &&
-      Number.isSafeInteger(candidate.revision) && Number(candidate.revision) > 0 &&
-      isIsoDate(candidate.createdAt) && isIsoDate(candidate.updatedAt) && Array.isArray(candidate.events) && candidate.events.length <= 1000;
-    if (!valid) throw new TaskError(`Задача ${index + 1} не прошла проверку.`);
-    if (ids.has(candidate.id as string)) throw new TaskError(`В копии повторяется идентификатор задачи ${index + 1}.`);
-    ids.add(candidate.id as string);
-    const serialized = JSON.stringify(candidate);
-    if (serialized.length > 65536) throw new TaskError(`Задача ${index + 1} слишком большая.`);
-    return { ...candidate, demo: false } as Task;
-  });
+export type Task = { id:string; title:string; description:string; sphere:string; directionId?:string; subcategory:string; dueDate:string|null; queue:number; priority:Priority; focus:boolean; status:Status; demo:boolean; revision:number; createdAt:string; updatedAt:string; events:TaskEvent[]; result?:string; proposal?:Proposal };
+export type Operation = {op:'complete'}|{op:'focus';value:boolean}|{op:'edit';description:string;sphere:string;directionId:string|null;dueDate:string|null;queue:number;priority:Priority}|{op:'decision';proposalId:string;decision:'approved'|'rejected'};
+export class TaskError extends Error { constructor(message:string, public status=400){super(message);} }
+function isRecord(value:unknown):value is Record<string,unknown>{return !!value&&typeof value==='object'&&!Array.isArray(value);}
+function isIsoDate(value:unknown){return typeof value==='string'&&!Number.isNaN(Date.parse(value));}
+export function event(title:string,detail:string,actor='Система'):TaskEvent{return {id:crypto.randomUUID(),at:new Date().toISOString(),title,detail,actor};}
+export function orderedCatalog(catalog:Catalog):Catalog{return {...catalog,spheres:[...catalog.spheres].sort((a,b)=>a.order-b.order),directions:[...catalog.directions].sort((a,b)=>a.order-b.order)};}
+export function normalizeCatalog(candidate:unknown):Catalog{
+  if(!isRecord(candidate)||!Array.isArray(candidate.spheres)||!Array.isArray(candidate.directions)||!Number.isSafeInteger(candidate.revision))throw new TaskError('Каталог сфер имеет неверный формат.');
+  const sphereIds=new Set<string>(); const spheres=candidate.spheres.map((item,index)=>{if(!isRecord(item)||typeof item.id!=='string'||!/^[a-z0-9-]{3,60}$/.test(item.id)||sphereIds.has(item.id)||typeof item.name!=='string'||!item.name.trim()||item.name.trim().length>48||typeof item.color!=='string'||!/^#[0-9a-f]{6}$/i.test(item.color))throw new TaskError(`Сфера ${index+1} имеет неверные данные.`);sphereIds.add(item.id);return{id:item.id,name:item.name.trim(),color:item.color,order:index};});
+  if(!spheres.length||spheres.length>20)throw new TaskError('Нужно от 1 до 20 сфер.');
+  const directionIds=new Set<string>(); const directions=candidate.directions.map((item,index)=>{if(!isRecord(item)||typeof item.id!=='string'||!/^[a-z0-9-]{3,60}$/.test(item.id)||directionIds.has(item.id)||!sphereIds.has(String(item.sphereId))||typeof item.name!=='string'||!item.name.trim()||item.name.trim().length>60)throw new TaskError(`Направление ${index+1} имеет неверные данные.`);directionIds.add(item.id);return{id:item.id,sphereId:String(item.sphereId),name:item.name.trim(),order:index};});
+  return {revision:Number(candidate.revision),spheres,directions};
 }
-export function event(title: string, detail: string, actor = 'Система'): TaskEvent { return { id: crypto.randomUUID(), at: new Date().toISOString(), title, detail, actor }; }
-export function createTask(id: string, description: string, sphere: SphereId, subcategory: string, dueDate: string | null, queue: number, priority: Priority, demo = false): Task {
-  const now = new Date().toISOString();
-  return { id, title: description.split('\n')[0].slice(0, 110), description, sphere, subcategory, dueDate, queue, priority, demo, status: 'pending', revision: 1, createdAt: now, updatedAt: now, events: [event('Задача добавлена', demo ? 'Демонстрационный пример. Реальные инструменты не вызываются.' : 'Сохранена в вашем пространстве. Оркестратор ещё не подключён.', demo ? 'Демо' : 'Вы')] };
-}
-export function transition(task: Task, operation: Operation): Task {
-  const next = structuredClone(task);
-  if (operation.op === 'simulate') {
-    if (!task.demo || !['pending', 'running', 'error'].includes(task.status) || task.proposal) throw new TaskError('Демонстрация недоступна для этой задачи.', 409);
-    next.status = 'approval';
-    next.events.push(event('Демонстрационный план подготовлен', 'Фиксированный пример: разбор задачи → подготовка черновика → ожидание решения. Поиск и LLM не запускались.', 'Демо-сценарий'));
-    next.proposal = { id: crypto.randomUUID(), state: 'pending', title: task.sphere === 'travel' ? 'Согласовать вариант проживания' : 'Согласовать черновик запроса', recipient: 'Тестовый получатель — отправка отключена', cost: task.sphere === 'travel' ? '240 € · условный бюджет, не реальная цена' : 'Расходов нет', body: task.sphere === 'travel' ? 'Пример предложения: проживание в Лиссабоне на две ночи. Условная стоимость — 240 €. Даты, доступность и условия отмены не проверялись. Это демонстрация интерфейса, а не найденное предложение.' : `Здравствуйте!\n\nПрошу уточнить условия по следующему запросу:\n${task.description}\n\nСпасибо!\n\nЭто демонстрационный черновик. Адрес получателя не задан, письмо не будет отправлено.` };
-    next.events.push(event('Требуется ваше решение', 'Проверьте полный текст предложения. Одобрение сохранит только решение.', 'Демо-сценарий'));
-    delete next.result;
-  } else if (operation.op === 'decision') {
-    if (!task.demo || task.status !== 'approval' || !task.proposal || task.proposal.id !== operation.proposalId || task.proposal.state !== 'pending') throw new TaskError('Предложение уже обработано или изменилось. Обновите задачу.', 409);
-    next.proposal = { ...task.proposal, state: operation.decision, decidedAt: new Date().toISOString() };
-    next.status = 'pending';
-    next.result = operation.decision === 'approved' ? 'Вы одобрили предложение. Исполнение отключено: ничего не отправлено, не забронировано и не оплачено.' : 'Вы отклонили предложение. Никаких внешних действий не выполнено.';
-    next.events.push(event(operation.decision === 'approved' ? 'Предложение одобрено' : 'Предложение отклонено', next.result, 'Вы'));
-  } else if (operation.op === 'complete') {
-    if (task.status !== 'pending' || task.proposal?.state === 'pending') throw new TaskError('Сначала обработайте ожидающее решение.', 409);
-    next.status = 'completed';
-    next.result = 'Вы вручную отметили задачу завершённой. Система не выполняла внешних действий.';
-    next.events.push(event('Задача завершена вручную', next.result, 'Вы'));
-  } else { throw new TaskError('Неизвестное действие.'); }
-  next.revision += 1;
-  next.updatedAt = new Date().toISOString();
-  return next;
-}
-export function demoTasks(): Task[] {
-  const examples: [string, SphereId, string, Status, Priority, number][] = [
-    ['Спланировать выходные в Лиссабоне', 'travel', 'Составление маршрутов', 'approval', 'high', 1],
-    ['Подобрать материалы по AI-агентам', 'learning', '', 'running', 'medium', 2],
-    ['Подготовить презентацию для Лаборатории Комнатного', 'work', 'Лаборатория Комнатного', 'approval', 'critical', 1],
-    ['Составить программу силовых тренировок', 'fitness', '', 'pending', 'medium', 3],
-    ['Купить расходные материалы', 'shopping', '', 'completed', 'low', 4],
-    ['Запланировать семейный ужин', 'personal', '', 'error', 'high', 2],
-  ];
-  return examples.map(([description, sphere, subcategory, status, priority, queue], i) => {
-    const due = new Date(Date.now() + (i + 1) * 86400000).toISOString().slice(0, 10);
-    let task = createTask(`balance-demo-${i + 1}`, description, sphere, subcategory, due, queue, priority, true);
-    if (status === 'approval') task = transition(task, { op: 'simulate' });
-    else if (status === 'completed') task = transition(task, { op: 'complete' });
-    else {
-      task.status = status;
-      if (status === 'running') task.events.push(event('Пример статуса «В работе»', 'Реальный процесс не запущен. Используйте «Продолжить демо», чтобы проверить следующий шаг.', 'Демо'));
-      if (status === 'error') { task.result = 'Демонстрация ошибки: почтовая интеграция не подключена.'; task.events.push(event('Пример ошибки интеграции', task.result, 'Демо')); }
-    }
-    return task;
-  });
-}
+export function createTask(id:string,description:string,sphere:string,directionId:string|null,dueDate:string|null,queue:number,priority:Priority):Task{const now=new Date().toISOString();return{id,title:description.split('\n')[0].slice(0,110),description,sphere,directionId:directionId??undefined,subcategory:'',dueDate,queue,priority,focus:false,demo:false,status:'pending',revision:1,createdAt:now,updatedAt:now,events:[event('Задача добавлена','Сохранена в вашем пространстве.','Вы')]};}
+export function transition(task:Task,operation:Operation):Task{const next=structuredClone(task);if(operation.op==='complete'){if(task.status==='completed')throw new TaskError('Задача уже завершена.',409);next.status='completed';next.events.push(event('Задача завершена','Вы отметили задачу выполненной.','Вы'));}else if(operation.op==='focus'){next.focus=operation.value;next.events.push(event(operation.value?'Поставлена первой':'Убрана из первых',operation.value?'Задача будет показана первой в списке.':'Обычная очередность восстановлена.','Вы'));}else if(operation.op==='edit'){next.description=operation.description;next.title=operation.description.split('\n')[0].slice(0,110);next.sphere=operation.sphere;next.directionId=operation.directionId??undefined;next.subcategory='';next.dueDate=operation.dueDate;next.queue=operation.queue;next.priority=operation.priority;next.events.push(event('Задача отредактирована','Изменены свойства задачи.','Вы'));}else throw new TaskError('Подтверждения агентов ещё не подключены.',409);next.revision+=1;next.updatedAt=new Date().toISOString();return next;}
+export function parseBackup(value:unknown):Task[]{if(!isRecord(value)||!Array.isArray(value.tasks)||!value.tasks.length||value.tasks.length>500)throw new TaskError('Выберите резервную копию Orbit с задачами.');const ids=new Set<string>();return value.tasks.map((candidate,index)=>{if(!isRecord(candidate)||typeof candidate.id!=='string'||ids.has(candidate.id)||typeof candidate.title!=='string'||typeof candidate.description!=='string'||!candidate.description.trim()||typeof candidate.sphere!=='string'||typeof candidate.subcategory!=='string'||(candidate.dueDate!==null&&(typeof candidate.dueDate!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(candidate.dueDate)))||!Number.isInteger(candidate.queue)||!priorities.includes(candidate.priority as Priority)||!Object.hasOwn(statuses,String(candidate.status))||!isIsoDate(candidate.createdAt)||!isIsoDate(candidate.updatedAt)||!Array.isArray(candidate.events))throw new TaskError(`Задача ${index+1} не прошла проверку.`);ids.add(candidate.id);return{...candidate,directionId:typeof candidate.directionId==='string'?candidate.directionId:undefined,focus:Boolean(candidate.focus),demo:false} as Task;});}

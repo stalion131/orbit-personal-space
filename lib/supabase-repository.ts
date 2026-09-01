@@ -40,6 +40,11 @@ export async function saveCloudTask(client: SupabaseClient, task: Task, expected
   if (error) throw databaseError('Не удалось обновить задачу в Supabase.', error.code);
   if (!data?.length) throw new TaskError('Задача изменилась в другой вкладке. Обновите её перед действием.', 409);
 }
+export async function deleteCloudTask(client: SupabaseClient, id: string, expectedRevision: number): Promise<void> {
+  const { data, error } = await client.from('orbit_tasks').delete().eq('id', id).eq('revision', expectedRevision).select('id');
+  if (error) throw databaseError('Не удалось удалить задачу из Supabase.', error.code);
+  if (!data?.length) throw new TaskError('Задача изменилась в другой вкладке. Обновите страницу.', 409);
+}
 
 export async function importCloudTasks(client: SupabaseClient, ownerId: string, tasks: Task[]): Promise<void> {
   const rows = tasks.map(task => ({ id: task.id, owner_id: ownerId, payload: task, revision: task.revision, updated_at: task.updatedAt }));

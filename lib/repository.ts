@@ -1,4 +1,4 @@
-import { spheres, TaskError, type Task } from './tasks';
+import { TaskError, type Task } from './tasks';
 
 // Supabase is the only persistent store in Vercel. This small in-memory mode
 // keeps local UI development possible when no .env.local is configured.
@@ -7,7 +7,7 @@ const clone = (task: Task) => JSON.parse(JSON.stringify(task)) as Task;
 
 export async function listTasks(demo: boolean): Promise<Task[]> {
   return [...localTasks.values()]
-    .filter(task => task.demo === demo && spheres.some(sphere => sphere.id === task.sphere))
+    .filter(task => task.demo === demo)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.id.localeCompare(right.id))
     .map(clone);
 }
@@ -25,4 +25,9 @@ export async function saveTask(task: Task, expectedRevision: number): Promise<vo
   const saved = localTasks.get(task.id);
   if (!saved || saved.revision !== expectedRevision) throw new TaskError('Задача изменилась в другой вкладке. Обновите её перед действием.', 409);
   localTasks.set(task.id, clone(task));
+}
+export async function deleteTask(id: string, expectedRevision: number): Promise<void> {
+  const saved = localTasks.get(id);
+  if (!saved || saved.revision !== expectedRevision) throw new TaskError('Задача изменилась в другой вкладке. Обновите страницу.', 409);
+  localTasks.delete(id);
 }
