@@ -48,6 +48,7 @@ export type Operation =
   | { op: 'focus'; value: boolean }
   | { op: 'defer'; value: boolean; waitingFor?: string }
   | { op: 'edit'; description: string; sphere: string; directionId: string | null; dueDate: string | null; dueTime: string | null; durationMinutes: number; waitingFor: string; queue: number; priority: Priority }
+  | { op: 'apply_agent_triage'; proposalId: string; nextAction: string; reason: string; dueDate: string | null; durationMinutes: number; priority: Priority; focus: boolean }
   | { op: 'decision'; proposalId: string; decision: 'approved' | 'rejected' };
 export type CreateTaskInput = {
   id: string; description: string; sphere: string; directionId: string | null; dueDate: string | null;
@@ -108,6 +109,10 @@ export function transition(task: Task, operation: Operation): Task {
     next.durationMinutes = operation.durationMinutes; next.waitingFor = operation.waitingFor.trim(); next.queue = operation.queue; next.priority = operation.priority;
     if (next.status === 'someday' && !next.waitingFor) next.status = 'pending';
     next.events.push(event('Задача отредактирована', 'Изменены свойства задачи.', 'Вы'));
+  } else if (operation.op === 'apply_agent_triage') {
+    next.dueDate = operation.dueDate; if (!operation.dueDate) next.dueTime = null;
+    next.durationMinutes = operation.durationMinutes; next.priority = operation.priority; next.focus = operation.focus;
+    next.events.push(event('Совет ИИ применён', `Следующий шаг: ${operation.nextAction}\nПочему: ${operation.reason}`, 'ИИ-разбор задач'));
   } else throw new TaskError('Подтверждения агентов ещё не подключены.', 409);
   next.revision += 1; next.updatedAt = new Date().toISOString(); return next;
 }
