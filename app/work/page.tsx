@@ -5,9 +5,11 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
+  Bot,
   Check,
   ChevronRight,
   CircleAlert,
+  CircleCheckBig,
   ClipboardCheck,
   Download,
   FileCheck2,
@@ -25,12 +27,16 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  Send,
   Trash2,
+  TriangleAlert,
   Upload,
   X,
 } from 'lucide-react';
 import { LoginScreen } from '@/components/login-screen';
-import { defaultCatalog, defaultWorkChecklist, statuses, type Catalog, type Task, type WorkDocumentCategory, type WorkDocumentStatus, type WorkProject, type WorkProjectStage } from '@/lib/tasks';
+import type { PprDeveloperResult } from '@/lib/ppr-agent-types';
+import { buildPprSectionPlan, evaluatePprReadiness, pprModeLabels, pprScheduleLabels } from '@/lib/ppr-methodology';
+import { defaultCatalog, defaultWorkChecklist, statuses, type Catalog, type PprDevelopmentMode, type PprScheduleSource, type Task, type WorkDocumentCategory, type WorkDocumentStatus, type WorkProject, type WorkProjectStage } from '@/lib/tasks';
 import { useOrbitSession } from '@/lib/use-orbit-session';
 import './workspace.css';
 
@@ -58,9 +64,13 @@ const documentCategoryLabels: Record<WorkDocumentCategory, string> = {
 const documentStatusLabels: Record<WorkDocumentStatus, string> = {
   expected: 'Ожидается', available: 'Получен', review: 'На проверке', approved: 'Проверен',
 };
+const pprHandoffLabels = {
+  ntd_specialist: 'Специалист по НТД', quality_controller: 'Контролёр качества',
+  autocad_specialist: 'Специалист AutoCAD', contractor: 'Подрядчик / владелец проекта',
+} as const;
 
 const professionalAgents = [
-  { name: 'Разработчик ППР', description: 'Собирает разделы ППР по шаблону', icon: HardHat, state: 'Следующий этап' },
+  { name: 'Разработчик ППР', description: 'Проверяет исходные данные и строит карту ППР', icon: HardHat, state: 'Контракт MVP готов' },
   { name: 'Разработчик ТК', description: 'Готовит технологическую карту', icon: FileText, state: 'Следующий этап' },
   { name: 'Специалист по НТД', description: 'Проверяет требования по вашей базе', icon: LibraryBig, state: 'Ждёт базу НТД' },
   { name: 'Контролёр качества', description: 'Ищет пропуски и противоречия', icon: ClipboardCheck, state: 'Следующий этап' },
@@ -99,7 +109,12 @@ function fileSize(value: number | null) {
 }
 
 function initialProject(task: Task): WorkProject {
-  return task.workProject || { documentType: taskKind(task), objectName: task.title, objectAddress: '', customer: '', responsible: '', stage: 'source_data', documents: [], checklist: defaultWorkChecklist() };
+  return task.workProject || {
+    documentType: taskKind(task), objectName: task.title, objectAddress: '', customer: '', responsible: '', stage: 'source_data',
+    developmentMode: 'undecided', workType: '', baseTemplatePath: '', scheduleSource: 'unknown',
+    hasWorkAtHeight: false, hasLiftingStructures: false, usesTowerCrane: false, hasMonolithicWork: false,
+    documents: [], checklist: defaultWorkChecklist(),
+  };
 }
 
 export default function WorkWorkspace() {
@@ -125,6 +140,9 @@ export default function WorkWorkspace() {
   const [librarySearchChecked, setLibrarySearchChecked] = useState(false);
   const [librarySearching, setLibrarySearching] = useState(false);
   const [librarySearchApplied, setLibrarySearchApplied] = useState('');
+  const [pprAgentConsent, setPprAgentConsent] = useState(false);
+  const [pprAgentRunning, setPprAgentRunning] = useState(false);
+  const [pprAgentResult, setPprAgentResult] = useState<PprDeveloperResult | null>(null);
 
   const load = async () => {
     if (access.loading || (access.mode === 'supabase' && !access.accessToken)) return;
@@ -185,11 +203,17 @@ export default function WorkWorkspace() {
   const selected = tasks.find(task => task.id === selectedId && task.sphere === 'work' && task.directionId === pprDirection?.id) || workTasks[0];
   const selectedDirection = selected ? catalog.directions.find(item => item.id === selected.directionId)?.name : '';
   const progress = selected ? taskProgress(selected) : 0;
-  const sections = documentSections[kind];
+  const pprSectionPlan = projectDraft ? buildPprSectionPlan(projectDraft) : [];
+  const pprReadiness = projectDraft ? evaluatePprReadiness(projectDraft) : null;
+  const sections = kind === 'ppr' && pprSectionPlan.length ? pprSectionPlan.map(section => section.title) : documentSections[kind];
   const checklistDone = projectDraft?.checklist.filter(item => item.completed).length || 0;
   const librarySegments = (library.path || '').split('/').filter(Boolean);
 
-  useEffect(() => { if (selected) { const project = initialProject(selected); setProjectDraft(project); setKind(project.documentType); } else setProjectDraft(null); }, [selected?.id, selected?.revision]);
+  useEffect(() => {
+    if (selected) { const project = initialProject(selected); setProjectDraft(project); setKind(project.documentType); }
+    else setProjectDraft(null);
+    setPprAgentConsent(false); setPprAgentResult(null);
+  }, [selected?.id, selected?.revision]);
 
   const saveProject = async () => {
     if (!selected || !projectDraft || projectSaving) return;
@@ -200,6 +224,18 @@ export default function WorkWorkspace() {
       setNotice('Карточка проекта сохранена.');
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось сохранить карточку проекта.'); }
     finally { setProjectSaving(false); }
+  };
+
+  const runPprAgent = async () => {
+    if (!selected || !projectDraft || projectDraft.documentType !== 'ppr' || !pprAgentConsent || pprAgentRunning) return;
+    setPprAgentRunning(true); setError(''); setNotice(''); setPprAgentResult(null);
+    try {
+      const saved = await api<{ task: Task }>(`/api/tasks/${selected.id}`, access.accessToken, { method: 'PATCH', body: JSON.stringify({ op: 'edit_work_project', revision: selected.revision, project: projectDraft }) });
+      setTasks(current => current.map(task => task.id === saved.task.id ? saved.task : task));
+      const analysis = await api<{ result: PprDeveloperResult }>('/api/agents/ppr-developer', access.accessToken, { method: 'POST', body: JSON.stringify({ taskId: saved.task.id, confirmDataTransfer: true }) });
+      setPprAgentResult(analysis.result); setNotice('Разработчик ППР подготовил карту проекта. Проверьте результат.');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось запустить разработчика ППР.'); }
+    finally { setPprAgentRunning(false); }
   };
 
   const addDocument = () => {
@@ -255,7 +291,7 @@ export default function WorkWorkspace() {
         </div>
         <Link href="/" className="new-work-task"><Plus />Добавить рабочую задачу</Link>
         <div className="side-heading agent-heading"><span>ПРОФЕССИОНАЛЬНЫЕ АГЕНТЫ</span></div>
-        <div className="work-agents">{professionalAgents.map(agent => { const Icon = agent.icon; return <button key={agent.name} disabled><span><Icon /></span><span><strong>{agent.name}</strong><small>{agent.description}</small></span><em>{agent.state}</em></button>; })}</div>
+        <div className="work-agents">{professionalAgents.map(agent => { const Icon = agent.icon; const available = agent.name === 'Разработчик ППР'; return <button key={agent.name} disabled={!available} className={available ? 'available' : ''} onClick={() => document.getElementById('ppr-agent')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}><span><Icon /></span><span><strong>{agent.name}</strong><small>{agent.description}</small></span><em>{agent.state}</em></button>; })}</div>
       </aside>
 
       <section className="work-content">
@@ -278,6 +314,30 @@ export default function WorkWorkspace() {
             </div>
           </section>}
 
+          {projectDraft && kind === 'ppr' && pprReadiness && <section className="ppr-brief-card">
+            <header><div><span><HardHat /></span><div><small>ПАСПОРТ РАЗРАБОТКИ</small><h2>Условия и состав ППР</h2></div></div><em className={pprReadiness.ready ? 'ready' : ''}>{pprReadiness.score}% исходных данных</em></header>
+            <div className="ppr-brief-layout">
+              <div className="ppr-brief-fields">
+                <label><span>Режим разработки</span><select value={projectDraft.developmentMode} onChange={event => setProjectDraft({ ...projectDraft, developmentMode: event.target.value as PprDevelopmentMode })}>{Object.entries(pprModeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+                <label><span>Основной вид работ</span><input value={projectDraft.workType} maxLength={300} onChange={event => setProjectDraft({ ...projectDraft, workType: event.target.value })} placeholder="Например: монолитные работы" /></label>
+                <label><span>Источник графиков</span><select value={projectDraft.scheduleSource} onChange={event => setProjectDraft({ ...projectDraft, scheduleSource: event.target.value as PprScheduleSource })}>{Object.entries(pprScheduleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+                <label className="ppr-template-field"><span>Базовый шаблон</span><input value={projectDraft.baseTemplatePath} maxLength={1000} onChange={event => setProjectDraft({ ...projectDraft, baseTemplatePath: event.target.value })} placeholder="Название или путь к выбранному шаблону" /></label>
+                <div className="ppr-condition-grid">
+                  <label><input type="checkbox" checked={projectDraft.hasWorkAtHeight} onChange={event => setProjectDraft({ ...projectDraft, hasWorkAtHeight: event.target.checked })} /><span>Работы на высоте</span></label>
+                  <label><input type="checkbox" checked={projectDraft.hasLiftingStructures} onChange={event => setProjectDraft({ ...projectDraft, hasLiftingStructures: event.target.checked, usesTowerCrane: event.target.checked ? projectDraft.usesTowerCrane : false })} /><span>Подъёмные сооружения</span></label>
+                  <label><input type="checkbox" checked={projectDraft.usesTowerCrane} onChange={event => setProjectDraft({ ...projectDraft, usesTowerCrane: event.target.checked, hasLiftingStructures: event.target.checked || projectDraft.hasLiftingStructures })} /><span>Башенный кран</span></label>
+                  <label><input type="checkbox" checked={projectDraft.hasMonolithicWork} onChange={event => setProjectDraft({ ...projectDraft, hasMonolithicWork: event.target.checked })} /><span>Монолитные работы</span></label>
+                </div>
+              </div>
+              <aside className="ppr-readiness">
+                <div className="readiness-score"><strong>{pprReadiness.score}%</strong><span>{pprReadiness.ready ? 'можно начинать' : 'нужно уточнить данные'}</span></div>
+                {pprReadiness.missing.length > 0 && <div><b><CircleAlert />Блокирует запуск</b>{pprReadiness.missing.map(item => <p key={item}>{item}</p>)}</div>}
+                {pprReadiness.warnings.length > 0 && <div><b><TriangleAlert />Проверьте до выпуска</b>{pprReadiness.warnings.slice(0, 4).map(item => <p key={item}>{item}</p>)}</div>}
+                {pprReadiness.ready && !pprReadiness.warnings.length && <div className="readiness-complete"><CircleCheckBig /><span><b>Паспорт заполнен</b><p>Можно передавать проект агенту.</p></span></div>}
+              </aside>
+            </div>
+          </section>}
+
           <div className="workflow-strip">
             {projectStages.map((step, index) => { const currentIndex = projectStages.findIndex(item => item.id === projectDraft?.stage); return <div className={index === currentIndex ? 'current' : index < currentIndex ? 'complete' : ''} key={step.id}><span>{index < currentIndex ? <Check /> : index + 1}</span><b>{step.label}</b></div>; })}
           </div>
@@ -285,7 +345,7 @@ export default function WorkWorkspace() {
           <div className="work-grid">
             <section className="work-panel structure-panel">
               <header><div><span>СТРУКТУРА</span><h2>{kind === 'ppr' ? 'Разделы ППР' : 'Разделы ТК'}</h2></div><ListChecks /></header>
-              <div className="section-list">{sections.map((section, index) => <button key={section} className={index === 0 ? 'active' : ''}><span>{index + 1}</span><b>{section}</b><ChevronRight /></button>)}</div>
+              <div className="section-list">{sections.map((section, index) => { const planItem = kind === 'ppr' ? pprSectionPlan[index] : null; return <button key={planItem?.id || section} className={index === 0 ? 'active' : ''} title={planItem?.note}><span>{index + 1}</span><b>{section}{planItem && <small>{planItem.treatment === 'manual' ? 'Вручную' : planItem.treatment === 'reference' ? 'Ссылка' : planItem.treatment === 'expand' ? 'Раскрыть' : planItem.treatment === 'conditional' ? 'По условию' : 'Постоянный'}</small>}</b><ChevronRight /></button>; })}</div>
               <div className="task-stages"><span>ЭТАПЫ ИЗ ЗАДАЧИ</span>{selected.subtasks?.length ? selected.subtasks.map(item => <div key={item.id} className={item.completed ? 'done' : ''}><i>{item.completed && <Check />}</i><span><b>{item.title}</b><small>{dateLabel(item.dueDate)}{item.dueTime ? `, ${item.dueTime}` : ''}</small></span></div>) : <p>Этапы ещё не добавлены.</p>}</div>
             </section>
 
@@ -325,6 +385,27 @@ export default function WorkWorkspace() {
               <section className="work-panel ntd-panel"><header><div><span>НОРМАТИВНЫЙ КОНТРОЛЬ</span><h2>Специалист по НТД</h2></div><LibraryBig /></header><div className="agent-status"><i /><span><b>Подготовлен интерфейс</b><small>Агент начнёт проверку после подключения вашей базы НТД.</small></span></div><button disabled><ShieldCheck />Проверить раздел</button></section>
             </aside>
           </div>
+
+          {projectDraft && kind === 'ppr' && pprReadiness && <section className="ppr-agent-panel" id="ppr-agent">
+            <header><div><span><Bot /></span><div><small>ПРОФЕССИОНАЛЬНЫЙ АГЕНТ</small><h2>Разработчик ППР</h2></div></div><em>{pprAgentResult ? 'Анализ готов' : 'Контракт MVP'}</em></header>
+            <div className="ppr-agent-intro">
+              <div><h3>Что он делает сейчас</h3><p>Проверяет один выбранный проект, формирует карту разделов и вопросы по недостающим исходным данным. НТД, AutoCAD и контроль качества остаются отдельными ролями.</p></div>
+              <dl><div><dt>Разделов в карте</dt><dd>{pprSectionPlan.length}</dd></div><div><dt>Готовность</dt><dd>{pprReadiness.score}%</dd></div><div><dt>Режим</dt><dd>{projectDraft.developmentMode === 'with_tk' ? 'с ТК' : projectDraft.developmentMode === 'without_tk' ? 'без ТК' : 'не выбран'}</dd></div></dl>
+            </div>
+            <div className="ppr-agent-control">
+              <label aria-label="Разрешить анализ выбранного проекта"><input type="checkbox" checked={pprAgentConsent} onChange={event => setPprAgentConsent(event.target.checked)} /><span><b>Разрешаю анализ выбранного проекта</b><small>В OpenAI будут переданы описание этой задачи, паспорт ППР и названия записей реестра. Остальные задачи, файлы, email и локальная библиотека не передаются.</small></span></label>
+              <button onClick={() => void runPprAgent()} disabled={!pprAgentConsent || pprAgentRunning}>{pprAgentRunning ? <LoaderCircle className="spin" /> : <Send />}{pprAgentRunning ? 'Анализируем…' : 'Составить карту ППР'}</button>
+            </div>
+            {pprAgentResult && <div className="ppr-agent-result">
+              <div className="agent-result-summary"><span className={pprAgentResult.readiness === 'ready' ? 'ready' : ''}>{pprAgentResult.readiness === 'ready' ? <CircleCheckBig /> : <CircleAlert />}</span><div><b>{pprAgentResult.readiness === 'ready' ? 'Можно начинать разработку' : 'Сначала нужны уточнения'}</b><p>{pprAgentResult.overview}</p></div></div>
+              <div className="agent-result-grid">
+                <section className="agent-plan-sections"><h3>Карта разделов ППР</h3><div>{pprAgentResult.sections.map((item, index) => <article key={`${item.title}-${index}`}><span>{index + 1}</span><div><b>{item.title}</b><p>{item.rationale}</p></div><em>{item.treatment === 'manual' ? 'Вручную' : item.treatment === 'reference' ? 'Ссылка' : item.treatment === 'expand' ? 'Раскрыть' : item.treatment === 'conditional' ? 'По условию' : 'Оставить'}</em></article>)}</div></section>
+                <section><h3>Недостающие данные и вопросы</h3>{[...pprAgentResult.missingInformation, ...pprAgentResult.questions].filter((item, index, all) => all.indexOf(item) === index).length ? [...pprAgentResult.missingInformation, ...pprAgentResult.questions].filter((item, index, all) => all.indexOf(item) === index).map((item, index) => <p key={`${item}-${index}`}><span>{index + 1}</span>{item}</p>) : <p className="agent-result-empty">Дополнительных вопросов нет.</p>}</section>
+                <section><h3>Передать другим ролям</h3>{pprAgentResult.handoffs.length ? pprAgentResult.handoffs.map((item, index) => <p key={`${item.target}-${index}`}><b>{pprHandoffLabels[item.target]}</b>{item.reason}</p>) : <p className="agent-result-empty">Передача другим ролям пока не требуется.</p>}</section>
+                <section><h3>Предупреждения</h3>{pprAgentResult.warnings.length ? pprAgentResult.warnings.map((item, index) => <p key={`${item}-${index}`}><TriangleAlert />{item}</p>) : <p className="agent-result-empty">Дополнительных предупреждений нет.</p>}</section>
+              </div>
+            </div>}
+          </section>}
 
           <section className="local-library">
             <header><div><span><HardDrive /></span><div><small>ЛОКАЛЬНЫЕ МАТЕРИАЛЫ</small><h2>Библиотека шаблонов ППР и ТК</h2></div></div>{library.enabled && <em>Только на этом компьютере</em>}</header>

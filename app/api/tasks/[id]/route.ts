@@ -1,4 +1,4 @@
-import { priorities, statuses, transition, TaskError, validDuration, validTime, workDocumentCategories, workDocumentStatuses, workProjectStages, type Operation, type Priority } from '@/lib/tasks';
+import { pprDevelopmentModes, pprScheduleSources, priorities, statuses, transition, TaskError, validDuration, validTime, workDocumentCategories, workDocumentStatuses, workProjectStages, type Operation, type Priority } from '@/lib/tasks';
 import { getTask, saveTask, deleteTask } from '@/lib/repository';
 import { getCloudTask, saveCloudTask, deleteCloudTask } from '@/lib/supabase-repository';
 import { getCloudCatalog, getLocalCatalog } from '@/lib/catalog-repository';
@@ -22,7 +22,9 @@ export async function PATCH(request: Request, context: {params: Promise<{id: str
       if (!project || typeof project !== 'object' || Array.isArray(project)) throw new TaskError('Проверьте карточку рабочего проекта.');
       const record = project as Record<string, unknown>;
       const fields = [['objectName', 240], ['objectAddress', 300], ['customer', 200], ['responsible', 160]] as const;
-      if (!['ppr', 'tk'].includes(String(record.documentType)) || !workProjectStages.includes(record.stage as (typeof workProjectStages)[number]) || fields.some(([field, limit]) => typeof record[field] !== 'string' || String(record[field]).trim().length > limit)) throw new TaskError('Проверьте поля карточки проекта.');
+      const optionalFields = [['workType', 300], ['baseTemplatePath', 1000]] as const;
+      const flags = ['hasWorkAtHeight', 'hasLiftingStructures', 'usesTowerCrane', 'hasMonolithicWork'] as const;
+      if (!['ppr', 'tk'].includes(String(record.documentType)) || !workProjectStages.includes(record.stage as (typeof workProjectStages)[number]) || (record.developmentMode !== undefined && !pprDevelopmentModes.includes(record.developmentMode as (typeof pprDevelopmentModes)[number])) || (record.scheduleSource !== undefined && !pprScheduleSources.includes(record.scheduleSource as (typeof pprScheduleSources)[number])) || fields.some(([field, limit]) => typeof record[field] !== 'string' || String(record[field]).trim().length > limit) || optionalFields.some(([field, limit]) => record[field] !== undefined && (typeof record[field] !== 'string' || String(record[field]).trim().length > limit)) || flags.some(field => record[field] !== undefined && typeof record[field] !== 'boolean')) throw new TaskError('Проверьте поля карточки проекта.');
       if (!Array.isArray(record.documents) || record.documents.length > 100 || record.documents.some(item => {
         if (!item || typeof item !== 'object' || Array.isArray(item)) return true;
         const document = item as Record<string, unknown>;

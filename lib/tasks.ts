@@ -49,10 +49,16 @@ export const workDocumentCategories = ['source', 'template', 'ntd', 'draft', 'fi
 export type WorkDocumentCategory = (typeof workDocumentCategories)[number];
 export const workDocumentStatuses = ['expected', 'available', 'review', 'approved'] as const;
 export type WorkDocumentStatus = (typeof workDocumentStatuses)[number];
+export const pprDevelopmentModes = ['undecided', 'with_tk', 'without_tk'] as const;
+export type PprDevelopmentMode = (typeof pprDevelopmentModes)[number];
+export const pprScheduleSources = ['unknown', 'contractor', 'draft'] as const;
+export type PprScheduleSource = (typeof pprScheduleSources)[number];
 export type WorkDocument = { id: string; name: string; category: WorkDocumentCategory; version: string; status: WorkDocumentStatus; updatedAt: string };
 export type WorkChecklistItem = { id: string; title: string; completed: boolean };
 export type WorkProject = {
   documentType: 'ppr' | 'tk'; objectName: string; objectAddress: string; customer: string; responsible: string; stage: WorkProjectStage;
+  developmentMode: PprDevelopmentMode; workType: string; baseTemplatePath: string; scheduleSource: PprScheduleSource;
+  hasWorkAtHeight: boolean; hasLiftingStructures: boolean; usesTowerCrane: boolean; hasMonolithicWork: boolean;
   documents: WorkDocument[]; checklist: WorkChecklistItem[];
 };
 export type Task = {
@@ -98,6 +104,9 @@ function hydrateWorkProject(value: unknown): WorkProject | undefined {
   if (!isRecord(value)) return undefined;
   const documentType = value.documentType === 'tk' ? 'tk' : 'ppr';
   const stage = workProjectStages.includes(value.stage as WorkProjectStage) ? value.stage as WorkProjectStage : 'source_data';
+  const developmentMode = pprDevelopmentModes.includes(value.developmentMode as PprDevelopmentMode) ? value.developmentMode as PprDevelopmentMode : 'undecided';
+  const scheduleSource = pprScheduleSources.includes(value.scheduleSource as PprScheduleSource) ? value.scheduleSource as PprScheduleSource : 'unknown';
+  const usesTowerCrane = Boolean(value.usesTowerCrane);
   const text = (field: string, limit: number) => typeof value[field] === 'string' ? String(value[field]).trim().slice(0, limit) : '';
   const documents = Array.isArray(value.documents) ? value.documents.flatMap(candidate => {
     if (!isRecord(candidate) || typeof candidate.id !== 'string' || typeof candidate.name !== 'string' || !candidate.name.trim()) return [];
@@ -109,7 +118,12 @@ function hydrateWorkProject(value: unknown): WorkProject | undefined {
     if (!isRecord(candidate) || typeof candidate.id !== 'string' || typeof candidate.title !== 'string' || !candidate.title.trim()) return [];
     return [{ id: candidate.id.slice(0, 60), title: candidate.title.trim().slice(0, 180), completed: Boolean(candidate.completed) }];
   }).slice(0, 60) : defaultWorkChecklist();
-  return { documentType, objectName: text('objectName', 240), objectAddress: text('objectAddress', 300), customer: text('customer', 200), responsible: text('responsible', 160), stage, documents, checklist };
+  return {
+    documentType, objectName: text('objectName', 240), objectAddress: text('objectAddress', 300), customer: text('customer', 200), responsible: text('responsible', 160), stage,
+    developmentMode, workType: text('workType', 300), baseTemplatePath: text('baseTemplatePath', 1000), scheduleSource,
+    hasWorkAtHeight: Boolean(value.hasWorkAtHeight), hasLiftingStructures: Boolean(value.hasLiftingStructures) || usesTowerCrane, usesTowerCrane, hasMonolithicWork: Boolean(value.hasMonolithicWork),
+    documents, checklist,
+  };
 }
 
 export function defaultWorkChecklist(): WorkChecklistItem[] {
