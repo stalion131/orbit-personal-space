@@ -9,9 +9,11 @@ import {
   ChevronRight,
   CircleAlert,
   ClipboardCheck,
+  Download,
   FileCheck2,
   FileText,
   FolderOpen,
+  HardDrive,
   HardHat,
   LibraryBig,
   ListChecks,
@@ -32,6 +34,8 @@ import { useOrbitSession } from '@/lib/use-orbit-session';
 import './workspace.css';
 
 type DocumentKind = 'ppr' | 'tk';
+type LocalFileItem = { name: string; path: string; kind: 'directory' | 'file'; extension: string; size: number | null; modifiedAt: string };
+type LocalLibrary = { enabled: boolean; rootName?: string; path?: string; items: LocalFileItem[] };
 
 const projectStages: { id: WorkProjectStage; label: string }[] = [
   { id: 'source_data', label: 'Исходные данные' }, { id: 'structure', label: 'Структура' },
@@ -84,6 +88,12 @@ function taskProgress(task: Task) {
   return Math.round(task.subtasks.filter(item => item.completed).length / task.subtasks.length * 100);
 }
 
+function fileSize(value: number | null) {
+  if (value === null) return '';
+  if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} КБ`;
+  return `${(value / 1024 / 1024).toFixed(1)} МБ`;
+}
+
 function initialProject(task: Task): WorkProject {
   return task.workProject || { documentType: taskKind(task), objectName: task.title, objectAddress: '', customer: '', responsible: '', stage: 'source_data', documents: [], checklist: defaultWorkChecklist() };
 }
@@ -103,6 +113,9 @@ export default function WorkWorkspace() {
   const [documentName, setDocumentName] = useState('');
   const [documentCategory, setDocumentCategory] = useState<WorkDocumentCategory>('source');
   const [checklistTitle, setChecklistTitle] = useState('');
+  const [library, setLibrary] = useState<LocalLibrary>({ enabled: false, items: [] });
+  const [libraryChecked, setLibraryChecked] = useState(false);
+  const [libraryLoading, setLibraryLoading] = useState(false);
 
   const load = async () => {
     if (access.loading || (access.mode === 'supabase' && !access.accessToken)) return;
@@ -127,6 +140,19 @@ export default function WorkWorkspace() {
 
   useEffect(() => { queueMicrotask(() => void load()); }, [access.loading, access.mode, access.accessToken]);
 
+  const loadLibrary = async (path = '') => {
+    if (access.loading || (access.mode === 'supabase' && !access.accessToken)) return;
+    setLibraryLoading(true);
+    try {
+      const data = await api<LocalLibrary>(`/api/work-files?path=${encodeURIComponent(path)}`, access.accessToken);
+      setLibrary(data); setLibraryChecked(true);
+    } catch (cause) {
+      setLibraryChecked(true); setError(cause instanceof Error ? cause.message : 'Не удалось открыть локальную библиотеку.');
+    } finally { setLibraryLoading(false); }
+  };
+
+  useEffect(() => { if (!access.loading) queueMicrotask(() => void loadLibrary()); }, [access.loading, access.mode, access.accessToken]);
+
   const pprDirection = catalog.directions.find(item => item.sphereId === 'work' && item.name.trim().toLocaleLowerCase('ru') === 'ппр');
   const workTasks = useMemo(() => tasks
     .filter(task => task.sphere === 'work' && task.directionId === pprDirection?.id)
@@ -138,6 +164,7 @@ export default function WorkWorkspace() {
   const progress = selected ? taskProgress(selected) : 0;
   const sections = documentSections[kind];
   const checklistDone = projectDraft?.checklist.filter(item => item.completed).length || 0;
+  const librarySegments = (library.path || '').split('/').filter(Boolean);
 
   useEffect(() => { if (selected) { const project = initialProject(selected); setProjectDraft(project); setKind(project.documentType); } else setProjectDraft(null); }, [selected?.id, selected?.revision]);
 
@@ -162,6 +189,19 @@ export default function WorkWorkspace() {
     if (!projectDraft || !checklistTitle.trim() || projectDraft.checklist.length >= 60) return;
     setProjectDraft({ ...projectDraft, checklist: [...projectDraft.checklist, { id: crypto.randomUUID(), title: checklistTitle.trim(), completed: false }] });
     setChecklistTitle('');
+  };
+
+  const downloadLocalFile = async (item: LocalFileItem) => {
+    setError('');
+    try {
+      const headers = new Headers({ 'X-Orbit-Client': 'dashboard' });
+      if (access.accessToken) headers.set('Authorization', `Bearer ${access.accessToken}`);
+      const response = await fetch(`/api/work-files/download?path=${encodeURIComponent(item.path)}`, { headers, cache: 'no-store' });
+      if (!response.ok) { const value = await response.json() as { error?: string }; throw new Error(value.error || 'Не удалось скачать файл.'); }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a'); link.href = url; link.download = item.name; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось скачать файл.'); }
   };
 
   if (access.loading) return <main className="work-auth"><LoaderCircle className="spin" />Загружаем рабочее пространство…</main>;
@@ -262,6 +302,14 @@ export default function WorkWorkspace() {
               <section className="work-panel ntd-panel"><header><div><span>НОРМАТИВНЫЙ КОНТРОЛЬ</span><h2>Специалист по НТД</h2></div><LibraryBig /></header><div className="agent-status"><i /><span><b>Подготовлен интерфейс</b><small>Агент начнёт проверку после подключения вашей базы НТД.</small></span></div><button disabled><ShieldCheck />Проверить раздел</button></section>
             </aside>
           </div>
+
+          <section className="local-library">
+            <header><div><span><HardDrive /></span><div><small>ЛОКАЛЬНЫЕ МАТЕРИАЛЫ</small><h2>Библиотека шаблонов ППР и ТК</h2></div></div>{library.enabled && <em>Только на этом компьютере</em>}</header>
+            {!libraryChecked || libraryLoading ? <div className="library-state"><LoaderCircle className="spin" />Читаем локальную папку…</div> : !library.enabled ? <div className="library-state"><HardDrive /><div><b>Локальная библиотека выключена</b><p>На сайте Vercel файлы с диска компьютера недоступны. Запустите локальную версию Orbit.</p></div></div> : <>
+              <nav className="library-path"><button onClick={() => void loadLibrary('')}><HardDrive />{library.rootName}</button>{librarySegments.map((segment, index) => <button key={`${segment}-${index}`} onClick={() => void loadLibrary(librarySegments.slice(0, index + 1).join('/'))}><ChevronRight />{segment}</button>)}</nav>
+              <div className="library-items">{library.items.map(item => item.kind === 'directory' ? <button key={item.path} className="library-folder" onClick={() => void loadLibrary(item.path)}><FolderOpen /><span><b>{item.name}</b><small>Папка</small></span><ChevronRight /></button> : <article key={item.path}><FileText /><span><b>{item.name}</b><small>{item.extension.toLocaleUpperCase()} · {fileSize(item.size)} · {new Date(item.modifiedAt).toLocaleDateString('ru-RU')}</small></span><button onClick={() => void downloadLocalFile(item)} aria-label={`Скачать ${item.name}`}><Download /></button></article>)}</div>
+            </>}
+          </section>
 
           <section className="quality-bar"><div><FileCheck2 /><span><b>Контроль документа</b><small>Реестр и чек-лист сохраняются вместе с карточкой проекта.</small></span></div><dl><div><dt>Документы</dt><dd>{projectDraft?.documents.length || 0}</dd></div><div><dt>Чек-лист</dt><dd>{checklistDone} / {projectDraft?.checklist.length || 0}</dd></div><div><dt>Разделы</dt><dd>0 / {sections.length}</dd></div></dl><button disabled><Scale />Передать на проверку</button></section>
         </>}
