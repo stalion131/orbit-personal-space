@@ -1,8 +1,9 @@
 export const statuses = {
-  running: 'В работе', approval: 'Ждёт решения', error: 'Требует внимания',
-  pending: 'Запланировано', someday: 'До ситуации', completed: 'Завершено',
+  active: 'Активная', waiting: 'Ожидает действия со стороны', paused: 'Приостановлена',
+  someday: 'До ситуации', completed: 'Завершена',
 } as const;
 export type Status = keyof typeof statuses;
+const legacyStatuses: Record<string, Status> = { pending: 'active', running: 'active', approval: 'waiting', error: 'paused' };
 export const priorities = ['low', 'medium', 'high', 'critical'] as const;
 export type Priority = (typeof priorities)[number];
 export type Sphere = { id: string; name: string; color: string; order: number };
@@ -48,6 +49,7 @@ export type Operation =
   | { op: 'complete' }
   | { op: 'focus'; value: boolean }
   | { op: 'defer'; value: boolean; waitingFor?: string }
+  | { op: 'set_status'; status: Status; waitingFor?: string }
   | { op: 'edit'; description: string; sphere: string; directionId: string | null; dueDate: string | null; dueTime: string | null; durationMinutes: number; waitingFor: string; queue: number; priority: Priority }
   | { op: 'add_subtask'; id: string; title: string; dueDate: string | null; dueTime: string | null }
   | { op: 'edit_subtask'; id: string; title: string; dueDate: string | null; dueTime: string | null }
@@ -66,6 +68,7 @@ function isIsoDate(value: unknown) { return typeof value === 'string' && !Number
 export function validDate(value: unknown) { return value === null || (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)); }
 export function validTime(value: unknown) { return value === null || (typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value)); }
 export function validDuration(value: unknown) { return Number.isInteger(value) && Number(value) >= 5 && Number(value) <= 1440; }
+export function normalizeStatus(value: unknown): Status { const text = String(value); return Object.hasOwn(statuses, text) ? text as Status : legacyStatuses[text] || 'active'; }
 export function event(title: string, detail: string, actor = 'Система'): TaskEvent { return { id: crypto.randomUUID(), at: new Date().toISOString(), title, detail, actor }; }
 function hydrateSubtasks(value: unknown): Subtask[] {
   if (!Array.isArray(value)) return [];
@@ -75,7 +78,7 @@ function hydrateSubtasks(value: unknown): Subtask[] {
   });
 }
 export function hydrateTask(task: Task): Task {
-  const status = Object.hasOwn(statuses, task.status) ? task.status : 'pending';
+  const status = normalizeStatus(task.status);
   return { ...task, directionId: task.directionId || legacyDirectionId(task.sphere, task.subcategory), dueTime: task.dueTime ?? null,
     durationMinutes: validDuration(task.durationMinutes) ? task.durationMinutes : 60, waitingFor: typeof task.waitingFor === 'string' ? task.waitingFor : '',
     focus: Boolean(task.focus), status, subtasks: hydrateSubtasks(task.subtasks) };
@@ -100,7 +103,7 @@ export function createTask(input: CreateTaskInput): Task {
   const now = new Date().toISOString(); const waitingFor = input.waitingFor.trim();
   return { id: input.id, title: input.description.split('\n')[0].slice(0, 110), description: input.description, sphere: input.sphere,
     directionId: input.directionId ?? undefined, subcategory: '', dueDate: input.dueDate, dueTime: input.dueTime, durationMinutes: input.durationMinutes,
-    waitingFor, queue: input.queue, priority: input.priority, focus: false, demo: false, status: waitingFor ? 'someday' : 'pending', revision: 1,
+    waitingFor, queue: input.queue, priority: input.priority, focus: false, demo: false, status: waitingFor ? 'someday' : 'active', revision: 1,
     createdAt: now, updatedAt: now, events: [event('Задача добавлена', waitingFor ? `Отложена до ситуации: ${waitingFor}` : 'Сохранена в вашем пространстве.', 'Вы')], subtasks: [] };
 }
 export function transition(task: Task, operation: Operation): Task {
@@ -113,13 +116,18 @@ export function transition(task: Task, operation: Operation): Task {
   } else if (operation.op === 'defer') {
     const waitingFor = operation.waitingFor?.trim() || next.waitingFor || '';
     if (operation.value && !waitingFor) throw new TaskError('Укажите ситуацию, до которой отложить задачу.');
-    next.waitingFor = operation.value ? waitingFor : ''; next.status = operation.value ? 'someday' : 'pending';
+    next.waitingFor = operation.value ? waitingFor : ''; next.status = operation.value ? 'someday' : 'active';
     next.events.push(event(operation.value ? 'Перенесена во временное хранилище' : 'Возвращена в план', operation.value ? `До ситуации: ${waitingFor}` : 'Задача снова активна.', 'Вы'));
+  } else if (operation.op === 'set_status') {
+    const waitingFor = operation.waitingFor?.trim() || next.waitingFor || '';
+    if (operation.status === 'someday' && !waitingFor) throw new TaskError('Укажите ситуацию для временного хранения.');
+    next.status = operation.status; next.waitingFor = operation.status === 'someday' ? waitingFor : '';
+    next.events.push(event('Статус изменён', statuses[operation.status], 'Вы'));
   } else if (operation.op === 'edit') {
     next.description = operation.description; next.title = operation.description.split('\n')[0].slice(0, 110); next.sphere = operation.sphere;
     next.directionId = operation.directionId ?? undefined; next.subcategory = ''; next.dueDate = operation.dueDate; next.dueTime = operation.dueTime;
-    next.durationMinutes = operation.durationMinutes; next.waitingFor = operation.waitingFor.trim(); next.queue = operation.queue; next.priority = operation.priority;
-    if (next.status === 'someday' && !next.waitingFor) next.status = 'pending';
+    next.durationMinutes = operation.durationMinutes; next.waitingFor = next.status === 'someday' ? operation.waitingFor.trim() : ''; next.queue = operation.queue; next.priority = operation.priority;
+    if (next.status === 'someday' && !next.waitingFor) next.status = 'active';
     next.events.push(event('Задача отредактирована', 'Изменены свойства задачи.', 'Вы'));
   } else if (operation.op === 'add_subtask') {
     if (next.subtasks.length >= 100) throw new TaskError('В одной задаче можно хранить до 100 этапов.');
@@ -153,7 +161,7 @@ export function parseBackup(value: unknown): Task[] {
   if (!isRecord(value) || !Array.isArray(value.tasks) || !value.tasks.length || value.tasks.length > 500) throw new TaskError('Выберите резервную копию Orbit с задачами.');
   const ids = new Set<string>();
   return value.tasks.map((candidate, index) => {
-    if (!isRecord(candidate) || typeof candidate.id !== 'string' || ids.has(candidate.id) || typeof candidate.title !== 'string' || typeof candidate.description !== 'string' || !candidate.description.trim() || typeof candidate.sphere !== 'string' || typeof candidate.subcategory !== 'string' || !validDate(candidate.dueDate) || !Number.isInteger(candidate.queue) || !priorities.includes(candidate.priority as Priority) || !Object.hasOwn(statuses, String(candidate.status)) || !isIsoDate(candidate.createdAt) || !isIsoDate(candidate.updatedAt) || !Array.isArray(candidate.events)) throw new TaskError(`Задача ${index + 1} не прошла проверку.`);
+    if (!isRecord(candidate) || typeof candidate.id !== 'string' || ids.has(candidate.id) || typeof candidate.title !== 'string' || typeof candidate.description !== 'string' || !candidate.description.trim() || typeof candidate.sphere !== 'string' || typeof candidate.subcategory !== 'string' || !validDate(candidate.dueDate) || !Number.isInteger(candidate.queue) || !priorities.includes(candidate.priority as Priority) || (!Object.hasOwn(statuses, String(candidate.status)) && !Object.hasOwn(legacyStatuses, String(candidate.status))) || !isIsoDate(candidate.createdAt) || !isIsoDate(candidate.updatedAt) || !Array.isArray(candidate.events)) throw new TaskError(`Задача ${index + 1} не прошла проверку.`);
     ids.add(candidate.id); return hydrateTask({ ...candidate, demo: false } as Task);
   });
 }
