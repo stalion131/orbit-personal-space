@@ -61,6 +61,7 @@ export async function triageTasks(tasks: Task[], catalog: Catalog, today: string
       focus: task.focus,
       status: task.status,
       waitingFor: task.waitingFor || null,
+      subtasks: (task.subtasks || []).map(subtask => ({ title: subtask.title, dueDate: subtask.dueDate, dueTime: subtask.dueTime, completed: subtask.completed })),
       })),
     };
     const runner = new Runner({ tracingDisabled: true, traceIncludeSensitiveData: false });

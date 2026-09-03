@@ -37,17 +37,22 @@ export function legacyDirectionId(sphere: string, subcategory: string) {
 
 export type TaskEvent = { id: string; at: string; title: string; detail: string; actor: string };
 export type Proposal = { id: string; title: string; body: string; recipient: string; cost: string; state: 'pending' | 'approved' | 'rejected'; decidedAt?: string };
+export type Subtask = { id: string; title: string; dueDate: string | null; dueTime: string | null; completed: boolean; createdAt: string; completedAt: string | null };
 export type Task = {
   id: string; title: string; description: string; sphere: string; directionId?: string; subcategory: string;
   dueDate: string | null; dueTime?: string | null; durationMinutes?: number; waitingFor?: string;
   queue: number; priority: Priority; focus: boolean; status: Status; demo: boolean; revision: number;
-  createdAt: string; updatedAt: string; events: TaskEvent[]; result?: string; proposal?: Proposal;
+  createdAt: string; updatedAt: string; events: TaskEvent[]; subtasks: Subtask[]; result?: string; proposal?: Proposal;
 };
 export type Operation =
   | { op: 'complete' }
   | { op: 'focus'; value: boolean }
   | { op: 'defer'; value: boolean; waitingFor?: string }
   | { op: 'edit'; description: string; sphere: string; directionId: string | null; dueDate: string | null; dueTime: string | null; durationMinutes: number; waitingFor: string; queue: number; priority: Priority }
+  | { op: 'add_subtask'; id: string; title: string; dueDate: string | null; dueTime: string | null }
+  | { op: 'edit_subtask'; id: string; title: string; dueDate: string | null; dueTime: string | null }
+  | { op: 'toggle_subtask'; id: string; value: boolean }
+  | { op: 'delete_subtask'; id: string }
   | { op: 'apply_agent_triage'; proposalId: string; nextAction: string; reason: string; dueDate: string | null; durationMinutes: number; priority: Priority; focus: boolean }
   | { op: 'decision'; proposalId: string; decision: 'approved' | 'rejected' };
 export type CreateTaskInput = {
@@ -62,11 +67,18 @@ export function validDate(value: unknown) { return value === null || (typeof val
 export function validTime(value: unknown) { return value === null || (typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value)); }
 export function validDuration(value: unknown) { return Number.isInteger(value) && Number(value) >= 5 && Number(value) <= 1440; }
 export function event(title: string, detail: string, actor = 'Система'): TaskEvent { return { id: crypto.randomUUID(), at: new Date().toISOString(), title, detail, actor }; }
+function hydrateSubtasks(value: unknown): Subtask[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(candidate => {
+    if (!isRecord(candidate) || typeof candidate.id !== 'string' || typeof candidate.title !== 'string' || !candidate.title.trim() || !validDate(candidate.dueDate ?? null) || !validTime(candidate.dueTime ?? null)) return [];
+    return [{ id: candidate.id, title: candidate.title.trim().slice(0, 300), dueDate: (candidate.dueDate as string | null) ?? null, dueTime: (candidate.dueTime as string | null) ?? null, completed: Boolean(candidate.completed), createdAt: isIsoDate(candidate.createdAt) ? candidate.createdAt as string : new Date().toISOString(), completedAt: isIsoDate(candidate.completedAt) ? candidate.completedAt as string : null }];
+  });
+}
 export function hydrateTask(task: Task): Task {
   const status = Object.hasOwn(statuses, task.status) ? task.status : 'pending';
   return { ...task, directionId: task.directionId || legacyDirectionId(task.sphere, task.subcategory), dueTime: task.dueTime ?? null,
     durationMinutes: validDuration(task.durationMinutes) ? task.durationMinutes : 60, waitingFor: typeof task.waitingFor === 'string' ? task.waitingFor : '',
-    focus: Boolean(task.focus), status };
+    focus: Boolean(task.focus), status, subtasks: hydrateSubtasks(task.subtasks) };
 }
 export function orderedCatalog(catalog: Catalog): Catalog { return { ...catalog, spheres: [...catalog.spheres].sort((a, b) => a.order - b.order), directions: [...catalog.directions].sort((a, b) => a.order - b.order) }; }
 export function normalizeCatalog(candidate: unknown): Catalog {
@@ -89,7 +101,7 @@ export function createTask(input: CreateTaskInput): Task {
   return { id: input.id, title: input.description.split('\n')[0].slice(0, 110), description: input.description, sphere: input.sphere,
     directionId: input.directionId ?? undefined, subcategory: '', dueDate: input.dueDate, dueTime: input.dueTime, durationMinutes: input.durationMinutes,
     waitingFor, queue: input.queue, priority: input.priority, focus: false, demo: false, status: waitingFor ? 'someday' : 'pending', revision: 1,
-    createdAt: now, updatedAt: now, events: [event('Задача добавлена', waitingFor ? `Отложена до ситуации: ${waitingFor}` : 'Сохранена в вашем пространстве.', 'Вы')] };
+    createdAt: now, updatedAt: now, events: [event('Задача добавлена', waitingFor ? `Отложена до ситуации: ${waitingFor}` : 'Сохранена в вашем пространстве.', 'Вы')], subtasks: [] };
 }
 export function transition(task: Task, operation: Operation): Task {
   const next = structuredClone(hydrateTask(task));
@@ -109,6 +121,27 @@ export function transition(task: Task, operation: Operation): Task {
     next.durationMinutes = operation.durationMinutes; next.waitingFor = operation.waitingFor.trim(); next.queue = operation.queue; next.priority = operation.priority;
     if (next.status === 'someday' && !next.waitingFor) next.status = 'pending';
     next.events.push(event('Задача отредактирована', 'Изменены свойства задачи.', 'Вы'));
+  } else if (operation.op === 'add_subtask') {
+    if (next.subtasks.length >= 100) throw new TaskError('В одной задаче можно хранить до 100 этапов.');
+    if (next.subtasks.some(item => item.id === operation.id)) throw new TaskError('Такой этап уже существует.', 409);
+    const now = new Date().toISOString();
+    next.subtasks.push({ id: operation.id, title: operation.title.trim(), dueDate: operation.dueDate, dueTime: operation.dueTime, completed: false, createdAt: now, completedAt: null });
+    next.events.push(event('Добавлен этап', operation.dueDate ? `${operation.title.trim()} — ${operation.dueDate}${operation.dueTime ? `, ${operation.dueTime}` : ''}` : operation.title.trim(), 'Вы'));
+  } else if (operation.op === 'edit_subtask') {
+    const item = next.subtasks.find(subtask => subtask.id === operation.id);
+    if (!item) throw new TaskError('Этап не найден.', 404);
+    Object.assign(item, { title: operation.title.trim(), dueDate: operation.dueDate, dueTime: operation.dueTime });
+    next.events.push(event('Этап изменён', operation.title.trim(), 'Вы'));
+  } else if (operation.op === 'toggle_subtask') {
+    const item = next.subtasks.find(subtask => subtask.id === operation.id);
+    if (!item) throw new TaskError('Этап не найден.', 404);
+    item.completed = operation.value; item.completedAt = operation.value ? new Date().toISOString() : null;
+    next.events.push(event(operation.value ? 'Этап выполнен' : 'Этап возвращён в работу', item.title, 'Вы'));
+  } else if (operation.op === 'delete_subtask') {
+    const item = next.subtasks.find(subtask => subtask.id === operation.id);
+    if (!item) throw new TaskError('Этап не найден.', 404);
+    next.subtasks = next.subtasks.filter(subtask => subtask.id !== operation.id);
+    next.events.push(event('Этап удалён', item.title, 'Вы'));
   } else if (operation.op === 'apply_agent_triage') {
     next.dueDate = operation.dueDate; if (!operation.dueDate) next.dueTime = null;
     next.durationMinutes = operation.durationMinutes; next.priority = operation.priority; next.focus = operation.focus;
