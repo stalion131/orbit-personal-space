@@ -83,7 +83,7 @@ export async function triageTasks(tasks: Task[], catalog: Catalog, today: string
       taskId: task.id,
       taskRevision: task.revision,
       taskTitle: task.title,
-      nextAction: item.nextAction.trim().slice(0, 500),
+      nextAction: item.nextAction.trim().slice(0, 300),
       suggestedPriority: item.suggestedPriority,
       suggestedDueDate: dueDate,
       suggestedDurationMinutes: duration,

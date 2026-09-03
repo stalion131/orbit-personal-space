@@ -151,9 +151,13 @@ export function transition(task: Task, operation: Operation): Task {
     next.subtasks = next.subtasks.filter(subtask => subtask.id !== operation.id);
     next.events.push(event('Этап удалён', item.title, 'Вы'));
   } else if (operation.op === 'apply_agent_triage') {
-    next.dueDate = operation.dueDate; if (!operation.dueDate) next.dueTime = null;
+    if (next.subtasks.length >= 100) throw new TaskError('В одной задаче можно хранить до 100 этапов.');
+    if (next.subtasks.some(item => item.id === operation.proposalId)) throw new TaskError('Это предложение ИИ уже применено.', 409);
+    const nextAction = operation.nextAction.trim();
+    const now = new Date().toISOString();
+    next.subtasks.push({ id: operation.proposalId, title: nextAction, dueDate: operation.dueDate, dueTime: null, completed: false, createdAt: now, completedAt: null });
     next.durationMinutes = operation.durationMinutes; next.priority = operation.priority; next.focus = operation.focus;
-    next.events.push(event('Совет ИИ применён', `Следующий шаг: ${operation.nextAction}\nПочему: ${operation.reason}`, 'ИИ-разбор задач'));
+    next.events.push(event('Подзадача предложена ИИ', `${nextAction}${operation.dueDate ? ` — ${operation.dueDate}` : ''}\nПочему: ${operation.reason}`, 'ИИ-разбор задач'));
   } else throw new TaskError('Подтверждения агентов ещё не подключены.', 409);
   next.revision += 1; next.updatedAt = new Date().toISOString(); return next;
 }
