@@ -30,7 +30,8 @@ const instructions = `Ты — ИИ-разборщик задач в лично�
 - suggestedDueDate — дата YYYY-MM-DD только когда срок следует из текста или текущих данных, иначе null;
 - suggestedDurationMinutes — реалистичная оценка от 5 до 1440 минут;
 - critical означает MVP/критически важную задачу, high — важную, medium — обычную, low — низкую;
-- focus=true только для максимум трёх задач, которыми действительно стоит заняться первыми;
+- верни ровно одно предложение для каждой переданной задачи, не пропускай задачи;
+- focus=true только для одной самой важной задачи в переданной группе;
 - clarifyingQuestion заполняй только если без ответа пользователя нельзя разумно спланировать задачу;
 - предложения не выполняются автоматически: пользователь отдельно решит, применять ли их;
 - отвечай по-русски, коротко и конкретно.`;
@@ -40,10 +41,14 @@ export async function triageTasks(tasks: Task[], catalog: Catalog, today: string
   const agent = new Agent({ name: 'ИИ-разбор задач', instructions, model, outputType: outputSchema });
   const sphereNames = new Map(catalog.spheres.map(item => [item.id, item.name]));
   const directionNames = new Map(catalog.directions.map(item => [item.id, item.name]));
-  const input = {
-    today,
-    timezone: 'Europe/Berlin',
-    tasks: tasks.slice(0, 100).map(task => ({
+  const sourceTasks = tasks.slice(0, 100);
+  const batches = Array.from({ length: Math.ceil(sourceTasks.length / 6) }, (_, index) => sourceTasks.slice(index * 6, index * 6 + 6));
+  const outputs = await Promise.all(batches.map(async batch => {
+    const input = {
+      today,
+      timezone: 'Europe/Berlin',
+      expectedProposalCount: batch.length,
+      tasks: batch.map(task => ({
       id: task.id,
       title: task.title,
       description: task.description,
@@ -56,18 +61,17 @@ export async function triageTasks(tasks: Task[], catalog: Catalog, today: string
       focus: task.focus,
       status: task.status,
       waitingFor: task.waitingFor || null,
-    })),
-  };
-  const runner = new Runner({
-    tracingDisabled: true,
-    traceIncludeSensitiveData: false,
-  });
-  const result = await runner.run(agent, JSON.stringify(input), { maxTurns: 2 });
-  if (!result.finalOutput) throw new Error('Agent returned no structured output');
+      })),
+    };
+    const runner = new Runner({ tracingDisabled: true, traceIncludeSensitiveData: false });
+    const result = await runner.run(agent, JSON.stringify(input), { maxTurns: 2 });
+    if (!result.finalOutput) throw new Error('Agent returned no structured output');
+    return result.finalOutput;
+  }));
 
-  const taskById = new Map(tasks.map(task => [task.id, task]));
+  const taskById = new Map(sourceTasks.map(task => [task.id, task]));
   const seen = new Set<string>();
-  const proposals = result.finalOutput.proposals.flatMap(item => {
+  const proposals = outputs.flatMap(output => output.proposals).flatMap(item => {
     const task = taskById.get(item.taskId);
     if (!task || seen.has(item.taskId)) return [];
     seen.add(item.taskId);
@@ -93,5 +97,6 @@ export async function triageTasks(tasks: Task[], catalog: Catalog, today: string
     focusCount += 1;
     if (focusCount > 3) proposal.focus = false;
   }
-  return { overview: result.finalOutput.overview.trim().slice(0, 1000), proposals };
+  if (proposals.length !== sourceTasks.length) throw new Error(`Agent returned ${proposals.length} proposals for ${sourceTasks.length} tasks`);
+  return { overview: `Разобрано ${proposals.length} задач. Проверьте предложения и применяйте только подходящие.`, proposals };
 }
