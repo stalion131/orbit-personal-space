@@ -8,7 +8,7 @@ function withSystemEntries(catalog: Catalog) { return withPprDirection(withHealt
 export async function getLocalCatalog() { return withSystemEntries(clone(localCatalog)); }
 export async function saveLocalCatalog(catalog: Catalog, revision: number) {
   if (localCatalog.revision !== revision) throw new TaskError('Каталог изменился в другой вкладке. Обновите страницу.', 409);
-  localCatalog = { ...normalizeCatalog(catalog), revision: revision + 1 };
+  localCatalog = { ...normalizeCatalog(withPprDirection(catalog)), revision: revision + 1 };
   return clone(localCatalog);
 }
 
@@ -20,7 +20,7 @@ export async function getCloudCatalog(client: SupabaseClient, ownerId: string) {
   return withSystemEntries({ ...orderedCatalog(normalizeCatalog((data as CatalogRow).payload)), revision: (data as CatalogRow).revision });
 }
 export async function saveCloudCatalog(client: SupabaseClient, ownerId: string, catalog: Catalog, revision: number) {
-  const normalized = normalizeCatalog(catalog);
+  const normalized = normalizeCatalog(withPprDirection(catalog));
   const next = { ...normalized, revision: revision + 1 };
   const { data: existing, error: readError } = await client.from('orbit_catalogs').select('revision').eq('owner_id', ownerId).maybeSingle();
   if (readError) throw new TaskError('Не удалось сохранить каталог сфер.', 502);
