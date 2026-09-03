@@ -27,6 +27,7 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react';
 import { LoginScreen } from '@/components/login-screen';
 import { defaultCatalog, defaultWorkChecklist, statuses, type Catalog, type Task, type WorkDocumentCategory, type WorkDocumentStatus, type WorkProject, type WorkProjectStage } from '@/lib/tasks';
@@ -36,6 +37,9 @@ import './workspace.css';
 type DocumentKind = 'ppr' | 'tk';
 type LocalFileItem = { name: string; path: string; kind: 'directory' | 'file'; extension: string; size: number | null; modifiedAt: string };
 type LocalLibrary = { enabled: boolean; rootName?: string; path?: string; items: LocalFileItem[] };
+type LocalIndexSummary = { total: number; indexed: number; needsConversion: number; errors: number; characters: number };
+type LocalSearchResult = { name: string; path: string; extension: string; score: number; snippet: string };
+type LocalSearch = { enabled: boolean; available: boolean; summary?: LocalIndexSummary; results: LocalSearchResult[] };
 
 const projectStages: { id: WorkProjectStage; label: string }[] = [
   { id: 'source_data', label: 'Исходные данные' }, { id: 'structure', label: 'Структура' },
@@ -116,6 +120,11 @@ export default function WorkWorkspace() {
   const [library, setLibrary] = useState<LocalLibrary>({ enabled: false, items: [] });
   const [libraryChecked, setLibraryChecked] = useState(false);
   const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryQuery, setLibraryQuery] = useState('');
+  const [librarySearch, setLibrarySearch] = useState<LocalSearch>({ enabled: false, available: false, results: [] });
+  const [librarySearchChecked, setLibrarySearchChecked] = useState(false);
+  const [librarySearching, setLibrarySearching] = useState(false);
+  const [librarySearchApplied, setLibrarySearchApplied] = useState('');
 
   const load = async () => {
     if (access.loading || (access.mode === 'supabase' && !access.accessToken)) return;
@@ -151,7 +160,21 @@ export default function WorkWorkspace() {
     } finally { setLibraryLoading(false); }
   };
 
-  useEffect(() => { if (!access.loading) queueMicrotask(() => void loadLibrary()); }, [access.loading, access.mode, access.accessToken]);
+  const searchLibrary = async (searchQuery = '') => {
+    if (access.loading || (access.mode === 'supabase' && !access.accessToken)) return;
+    const cleaned = searchQuery.trim();
+    setLibrarySearching(true);
+    try {
+      const data = await api<LocalSearch>(`/api/work-search?q=${encodeURIComponent(cleaned)}`, access.accessToken);
+      setLibrarySearch(data); setLibrarySearchApplied(cleaned); setLibrarySearchChecked(true);
+    } catch (cause) {
+      setLibrarySearchChecked(true); setError(cause instanceof Error ? cause.message : 'Не удалось выполнить поиск по библиотеке.');
+    } finally { setLibrarySearching(false); }
+  };
+
+  useEffect(() => {
+    if (!access.loading) queueMicrotask(() => { void loadLibrary(); void searchLibrary(); });
+  }, [access.loading, access.mode, access.accessToken]);
 
   const pprDirection = catalog.directions.find(item => item.sphereId === 'work' && item.name.trim().toLocaleLowerCase('ru') === 'ппр');
   const workTasks = useMemo(() => tasks
@@ -191,7 +214,7 @@ export default function WorkWorkspace() {
     setChecklistTitle('');
   };
 
-  const downloadLocalFile = async (item: LocalFileItem) => {
+  const downloadLocalFile = async (item: Pick<LocalFileItem, 'name' | 'path'>) => {
     setError('');
     try {
       const headers = new Headers({ 'X-Orbit-Client': 'dashboard' });
@@ -307,7 +330,21 @@ export default function WorkWorkspace() {
             <header><div><span><HardDrive /></span><div><small>ЛОКАЛЬНЫЕ МАТЕРИАЛЫ</small><h2>Библиотека шаблонов ППР и ТК</h2></div></div>{library.enabled && <em>Только на этом компьютере</em>}</header>
             {!libraryChecked || libraryLoading ? <div className="library-state"><LoaderCircle className="spin" />Читаем локальную папку…</div> : !library.enabled ? <div className="library-state"><HardDrive /><div><b>Локальная библиотека выключена</b><p>На сайте Vercel файлы с диска компьютера недоступны. Запустите локальную версию Orbit.</p></div></div> : <>
               <nav className="library-path"><button onClick={() => void loadLibrary('')}><HardDrive />{library.rootName}</button>{librarySegments.map((segment, index) => <button key={`${segment}-${index}`} onClick={() => void loadLibrary(librarySegments.slice(0, index + 1).join('/'))}><ChevronRight />{segment}</button>)}</nav>
-              <div className="library-items">{library.items.map(item => item.kind === 'directory' ? <button key={item.path} className="library-folder" onClick={() => void loadLibrary(item.path)}><FolderOpen /><span><b>{item.name}</b><small>Папка</small></span><ChevronRight /></button> : <article key={item.path}><FileText /><span><b>{item.name}</b><small>{item.extension.toLocaleUpperCase()} · {fileSize(item.size)} · {new Date(item.modifiedAt).toLocaleDateString('ru-RU')}</small></span><button onClick={() => void downloadLocalFile(item)} aria-label={`Скачать ${item.name}`}><Download /></button></article>)}</div>
+              <div className="library-search-box">
+                <form onSubmit={event => { event.preventDefault(); void searchLibrary(libraryQuery); }}>
+                  <Search /><input value={libraryQuery} maxLength={120} onChange={event => setLibraryQuery(event.target.value)} placeholder="Найти технологию, раздел или требование в шаблонах" />
+                  {librarySearchApplied && <button type="button" className="clear-library-search" onClick={() => { setLibraryQuery(''); void searchLibrary(''); }} aria-label="Очистить поиск"><X /></button>}
+                  <button type="submit" disabled={librarySearching || libraryQuery.trim().length < 2}>{librarySearching ? <LoaderCircle className="spin" /> : <Search />}Найти</button>
+                </form>
+                {librarySearchChecked && librarySearch.available && librarySearch.summary && <p><b>{librarySearch.summary.indexed}</b> файлов распознано · {librarySearch.summary.needsConversion} старых DOC требуют преобразования{librarySearch.summary.errors ? ` · ${librarySearch.summary.errors} файла требуют повторной обработки` : ''}</p>}
+                {librarySearchChecked && !librarySearch.available && <p>Индекс пока не создан. Папки и файлы доступны для просмотра вручную.</p>}
+              </div>
+              {librarySearchApplied ? <div className="library-results">
+                <div className="library-result-heading"><span>РЕЗУЛЬТАТЫ ПОИСКА</span><b>{librarySearch.results.length}</b></div>
+                {librarySearch.results.length ? librarySearch.results.map(item => <article key={item.path}>
+                  <FileText /><span><b>{item.name}</b><p>{item.snippet}</p><small>{item.path}</small></span><button onClick={() => void downloadLocalFile(item)} aria-label={`Скачать ${item.name}`}><Download /></button>
+                </article>) : <div className="library-no-results"><Search /><b>В распознанных шаблонах ничего не найдено</b><p>Попробуйте более короткий запрос или откройте папки вручную.</p></div>}
+              </div> : <div className="library-items">{library.items.map(item => item.kind === 'directory' ? <button key={item.path} className="library-folder" onClick={() => void loadLibrary(item.path)}><FolderOpen /><span><b>{item.name}</b><small>Папка</small></span><ChevronRight /></button> : <article key={item.path}><FileText /><span><b>{item.name}</b><small>{item.extension.toLocaleUpperCase()} · {fileSize(item.size)} · {new Date(item.modifiedAt).toLocaleDateString('ru-RU')}</small></span><button onClick={() => void downloadLocalFile(item)} aria-label={`Скачать ${item.name}`}><Download /></button></article>)}</div>}
             </>}
           </section>
 
