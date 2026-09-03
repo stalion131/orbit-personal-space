@@ -1,11 +1,11 @@
-import { priorities, statuses, transition, TaskError, validDuration, validTime, workProjectStages, type Operation, type Priority } from '@/lib/tasks';
+import { priorities, statuses, transition, TaskError, validDuration, validTime, workDocumentCategories, workDocumentStatuses, workProjectStages, type Operation, type Priority } from '@/lib/tasks';
 import { getTask, saveTask, deleteTask } from '@/lib/repository';
 import { getCloudTask, saveCloudTask, deleteCloudTask } from '@/lib/supabase-repository';
 import { getCloudCatalog, getLocalCatalog } from '@/lib/catalog-repository';
 import { authorize, body, json, failure } from '@/lib/http';
 export async function PATCH(request: Request, context: {params: Promise<{id: string}>}) {
   try {
-    const access = await authorize(request); const {id} = await context.params; const data = await body(request);
+    const access = await authorize(request); const {id} = await context.params; const data = await body(request, 131072);
     const task = access.mode === 'supabase' ? await getCloudTask(access.client, id) : await getTask(id);
     if (!task) throw new TaskError('Задача не найдена.', 404);
     if (!Number.isSafeInteger(data.revision) || data.revision !== task.revision) throw new TaskError('Задача изменилась. Обновите данные и повторите действие.', 409);
@@ -23,6 +23,16 @@ export async function PATCH(request: Request, context: {params: Promise<{id: str
       const record = project as Record<string, unknown>;
       const fields = [['objectName', 240], ['objectAddress', 300], ['customer', 200], ['responsible', 160]] as const;
       if (!['ppr', 'tk'].includes(String(record.documentType)) || !workProjectStages.includes(record.stage as (typeof workProjectStages)[number]) || fields.some(([field, limit]) => typeof record[field] !== 'string' || String(record[field]).trim().length > limit)) throw new TaskError('Проверьте поля карточки проекта.');
+      if (!Array.isArray(record.documents) || record.documents.length > 100 || record.documents.some(item => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return true;
+        const document = item as Record<string, unknown>;
+        return typeof document.id !== 'string' || !/^[0-9a-z-]{3,60}$/i.test(document.id) || typeof document.name !== 'string' || !document.name.trim() || document.name.trim().length > 180 || !workDocumentCategories.includes(document.category as (typeof workDocumentCategories)[number]) || typeof document.version !== 'string' || document.version.trim().length > 40 || !workDocumentStatuses.includes(document.status as (typeof workDocumentStatuses)[number]) || typeof document.updatedAt !== 'string' || Number.isNaN(Date.parse(document.updatedAt));
+      })) throw new TaskError('Проверьте реестр документов.');
+      if (!Array.isArray(record.checklist) || record.checklist.length > 60 || record.checklist.some(item => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return true;
+        const checklistItem = item as Record<string, unknown>;
+        return typeof checklistItem.id !== 'string' || !/^[0-9a-z-]{3,60}$/i.test(checklistItem.id) || typeof checklistItem.title !== 'string' || !checklistItem.title.trim() || checklistItem.title.trim().length > 180 || typeof checklistItem.completed !== 'boolean';
+      })) throw new TaskError('Проверьте чек-лист проекта.');
       const catalog = access.mode === 'supabase' ? await getCloudCatalog(access.client, access.userId) : await getLocalCatalog();
       const pprDirection = catalog.directions.find(item => item.sphereId === 'work' && item.name.trim().toLocaleLowerCase('ru') === 'ппр');
       if (task.sphere !== 'work' || !pprDirection || task.directionId !== pprDirection.id) throw new TaskError('Карточка доступна только для задач направления «ППР».');

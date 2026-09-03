@@ -45,7 +45,16 @@ export type Proposal = { id: string; title: string; body: string; recipient: str
 export type Subtask = { id: string; title: string; dueDate: string | null; dueTime: string | null; completed: boolean; createdAt: string; completedAt: string | null };
 export const workProjectStages = ['source_data', 'structure', 'drafting', 'ntd_review', 'approval'] as const;
 export type WorkProjectStage = (typeof workProjectStages)[number];
-export type WorkProject = { documentType: 'ppr' | 'tk'; objectName: string; objectAddress: string; customer: string; responsible: string; stage: WorkProjectStage };
+export const workDocumentCategories = ['source', 'template', 'ntd', 'draft', 'final'] as const;
+export type WorkDocumentCategory = (typeof workDocumentCategories)[number];
+export const workDocumentStatuses = ['expected', 'available', 'review', 'approved'] as const;
+export type WorkDocumentStatus = (typeof workDocumentStatuses)[number];
+export type WorkDocument = { id: string; name: string; category: WorkDocumentCategory; version: string; status: WorkDocumentStatus; updatedAt: string };
+export type WorkChecklistItem = { id: string; title: string; completed: boolean };
+export type WorkProject = {
+  documentType: 'ppr' | 'tk'; objectName: string; objectAddress: string; customer: string; responsible: string; stage: WorkProjectStage;
+  documents: WorkDocument[]; checklist: WorkChecklistItem[];
+};
 export type Task = {
   id: string; title: string; description: string; sphere: string; directionId?: string; subcategory: string;
   dueDate: string | null; dueTime?: string | null; durationMinutes?: number; waitingFor?: string;
@@ -90,7 +99,26 @@ function hydrateWorkProject(value: unknown): WorkProject | undefined {
   const documentType = value.documentType === 'tk' ? 'tk' : 'ppr';
   const stage = workProjectStages.includes(value.stage as WorkProjectStage) ? value.stage as WorkProjectStage : 'source_data';
   const text = (field: string, limit: number) => typeof value[field] === 'string' ? String(value[field]).trim().slice(0, limit) : '';
-  return { documentType, objectName: text('objectName', 240), objectAddress: text('objectAddress', 300), customer: text('customer', 200), responsible: text('responsible', 160), stage };
+  const documents = Array.isArray(value.documents) ? value.documents.flatMap(candidate => {
+    if (!isRecord(candidate) || typeof candidate.id !== 'string' || typeof candidate.name !== 'string' || !candidate.name.trim()) return [];
+    const category = workDocumentCategories.includes(candidate.category as WorkDocumentCategory) ? candidate.category as WorkDocumentCategory : 'source';
+    const status = workDocumentStatuses.includes(candidate.status as WorkDocumentStatus) ? candidate.status as WorkDocumentStatus : 'expected';
+    return [{ id: candidate.id.slice(0, 60), name: candidate.name.trim().slice(0, 180), category, version: typeof candidate.version === 'string' ? candidate.version.trim().slice(0, 40) : '', status, updatedAt: isIsoDate(candidate.updatedAt) ? candidate.updatedAt as string : new Date().toISOString() }];
+  }).slice(0, 100) : [];
+  const checklist = Array.isArray(value.checklist) ? value.checklist.flatMap(candidate => {
+    if (!isRecord(candidate) || typeof candidate.id !== 'string' || typeof candidate.title !== 'string' || !candidate.title.trim()) return [];
+    return [{ id: candidate.id.slice(0, 60), title: candidate.title.trim().slice(0, 180), completed: Boolean(candidate.completed) }];
+  }).slice(0, 60) : defaultWorkChecklist();
+  return { documentType, objectName: text('objectName', 240), objectAddress: text('objectAddress', 300), customer: text('customer', 200), responsible: text('responsible', 160), stage, documents, checklist };
+}
+
+export function defaultWorkChecklist(): WorkChecklistItem[] {
+  return [
+    { id: 'source-task', title: 'Получено техническое задание', completed: false },
+    { id: 'source-drawings', title: 'Получены чертежи и исходные данные', completed: false },
+    { id: 'source-schedule', title: 'Уточнены сроки и организация работ', completed: false },
+    { id: 'source-responsible', title: 'Назначены ответственные лица', completed: false },
+  ];
 }
 export function hydrateTask(task: Task): Task {
   const status = normalizeStatus(task.status);

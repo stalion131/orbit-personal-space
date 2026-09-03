@@ -23,10 +23,11 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Upload,
 } from 'lucide-react';
 import { LoginScreen } from '@/components/login-screen';
-import { defaultCatalog, statuses, type Catalog, type Task, type WorkProject, type WorkProjectStage } from '@/lib/tasks';
+import { defaultCatalog, defaultWorkChecklist, statuses, type Catalog, type Task, type WorkDocumentCategory, type WorkDocumentStatus, type WorkProject, type WorkProjectStage } from '@/lib/tasks';
 import { useOrbitSession } from '@/lib/use-orbit-session';
 import './workspace.css';
 
@@ -41,6 +42,13 @@ const projectStages: { id: WorkProjectStage; label: string }[] = [
 const documentSections: Record<DocumentKind, string[]> = {
   ppr: ['Общие данные', 'Организация работ', 'Технология производства', 'Машины и механизмы', 'Контроль качества', 'Охрана труда'],
   tk: ['Область применения', 'Организация процесса', 'Технологические операции', 'Материалы и механизмы', 'Контроль качества', 'Охрана труда'],
+};
+
+const documentCategoryLabels: Record<WorkDocumentCategory, string> = {
+  source: 'Исходные данные', template: 'Шаблон', ntd: 'НТД', draft: 'Черновик', final: 'Готовый документ',
+};
+const documentStatusLabels: Record<WorkDocumentStatus, string> = {
+  expected: 'Ожидается', available: 'Получен', review: 'На проверке', approved: 'Проверен',
 };
 
 const professionalAgents = [
@@ -77,7 +85,7 @@ function taskProgress(task: Task) {
 }
 
 function initialProject(task: Task): WorkProject {
-  return task.workProject || { documentType: taskKind(task), objectName: task.title, objectAddress: '', customer: '', responsible: '', stage: 'source_data' };
+  return task.workProject || { documentType: taskKind(task), objectName: task.title, objectAddress: '', customer: '', responsible: '', stage: 'source_data', documents: [], checklist: defaultWorkChecklist() };
 }
 
 export default function WorkWorkspace() {
@@ -92,6 +100,9 @@ export default function WorkWorkspace() {
   const [projectSaving, setProjectSaving] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [documentName, setDocumentName] = useState('');
+  const [documentCategory, setDocumentCategory] = useState<WorkDocumentCategory>('source');
+  const [checklistTitle, setChecklistTitle] = useState('');
 
   const load = async () => {
     if (access.loading || (access.mode === 'supabase' && !access.accessToken)) return;
@@ -126,6 +137,7 @@ export default function WorkWorkspace() {
   const selectedDirection = selected ? catalog.directions.find(item => item.id === selected.directionId)?.name : '';
   const progress = selected ? taskProgress(selected) : 0;
   const sections = documentSections[kind];
+  const checklistDone = projectDraft?.checklist.filter(item => item.completed).length || 0;
 
   useEffect(() => { if (selected) { const project = initialProject(selected); setProjectDraft(project); setKind(project.documentType); } else setProjectDraft(null); }, [selected?.id, selected?.revision]);
 
@@ -138,6 +150,18 @@ export default function WorkWorkspace() {
       setNotice('Карточка проекта сохранена.');
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось сохранить карточку проекта.'); }
     finally { setProjectSaving(false); }
+  };
+
+  const addDocument = () => {
+    if (!projectDraft || !documentName.trim() || projectDraft.documents.length >= 100) return;
+    setProjectDraft({ ...projectDraft, documents: [...projectDraft.documents, { id: crypto.randomUUID(), name: documentName.trim(), category: documentCategory, version: '1.0', status: 'expected', updatedAt: new Date().toISOString() }] });
+    setDocumentName('');
+  };
+
+  const addChecklistItem = () => {
+    if (!projectDraft || !checklistTitle.trim() || projectDraft.checklist.length >= 60) return;
+    setProjectDraft({ ...projectDraft, checklist: [...projectDraft.checklist, { id: crypto.randomUUID(), title: checklistTitle.trim(), completed: false }] });
+    setChecklistTitle('');
   };
 
   if (access.loading) return <main className="work-auth"><LoaderCircle className="spin" />Загружаем рабочее пространство…</main>;
@@ -217,12 +241,29 @@ export default function WorkWorkspace() {
             </section>
 
             <aside className="work-side-column">
-              <section className="work-panel files-panel"><header><div><span>ИСХОДНЫЕ ДАННЫЕ</span><h2>Файлы проекта</h2></div><Upload /></header><div className="files-empty"><FolderOpen /><b>Файлы пока не подключены</b><p>На следующем этапе добавим безопасное рабочее хранилище.</p><button disabled><Plus />Добавить файлы</button></div></section>
+              <section className="work-panel files-panel">
+                <header><div><span>ДОКУМЕНТЫ ПРОЕКТА</span><h2>Реестр файлов</h2></div><Upload /></header>
+                <div className="document-register">
+                  {projectDraft?.documents.length ? <div className="document-items">{projectDraft.documents.map(document => <article key={document.id}>
+                    <FileText />
+                    <div><b>{document.name}</b><span className="document-meta"><select aria-label={`Категория ${document.name}`} value={document.category} onChange={event => setProjectDraft({ ...projectDraft, documents: projectDraft.documents.map(item => item.id === document.id ? { ...item, category: event.target.value as WorkDocumentCategory, updatedAt: new Date().toISOString() } : item) })}>{Object.entries(documentCategoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input aria-label={`Версия ${document.name}`} value={document.version} maxLength={40} onChange={event => setProjectDraft({ ...projectDraft, documents: projectDraft.documents.map(item => item.id === document.id ? { ...item, version: event.target.value, updatedAt: new Date().toISOString() } : item) })} placeholder="Версия" /></span></div>
+                    <select aria-label={`Статус ${document.name}`} value={document.status} onChange={event => setProjectDraft({ ...projectDraft, documents: projectDraft.documents.map(item => item.id === document.id ? { ...item, status: event.target.value as WorkDocumentStatus, updatedAt: new Date().toISOString() } : item) })}>{Object.entries(documentStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+                    <button aria-label={`Удалить ${document.name}`} onClick={() => setProjectDraft({ ...projectDraft, documents: projectDraft.documents.filter(item => item.id !== document.id) })}><Trash2 /></button>
+                  </article>)}</div> : <div className="register-empty"><FolderOpen /><b>Реестр пока пуст</b><p>Добавьте названия ожидаемых или уже полученных документов.</p></div>}
+                  <div className="register-add"><input value={documentName} maxLength={180} onChange={event => setDocumentName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addDocument(); } }} placeholder="Например: рабочая документация" /><select value={documentCategory} onChange={event => setDocumentCategory(event.target.value as WorkDocumentCategory)}>{Object.entries(documentCategoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button onClick={addDocument} disabled={!documentName.trim()}><Plus />Добавить</button></div>
+                  <p className="storage-note"><Upload />Сейчас сохраняются данные о документе. Загрузка самого файла появится после выбора хранилища.</p>
+                </div>
+              </section>
+              <section className="work-panel checklist-panel">
+                <header><div><span>ГОТОВНОСТЬ ПРОЕКТА</span><h2>Чек-лист</h2></div><ClipboardCheck /></header>
+                <div className="project-checklist">{projectDraft?.checklist.map(item => <div key={item.id} className={item.completed ? 'done' : ''}><button aria-label={item.completed ? `Вернуть ${item.title}` : `Выполнить ${item.title}`} onClick={() => setProjectDraft({ ...projectDraft, checklist: projectDraft.checklist.map(check => check.id === item.id ? { ...check, completed: !check.completed } : check) })}>{item.completed && <Check />}</button><span>{item.title}</span><button aria-label={`Удалить ${item.title}`} onClick={() => setProjectDraft({ ...projectDraft, checklist: projectDraft.checklist.filter(check => check.id !== item.id) })}><Trash2 /></button></div>)}</div>
+                <div className="checklist-add"><input value={checklistTitle} maxLength={180} onChange={event => setChecklistTitle(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addChecklistItem(); } }} placeholder="Добавить пункт проверки" /><button onClick={addChecklistItem} disabled={!checklistTitle.trim()}><Plus /></button></div>
+              </section>
               <section className="work-panel ntd-panel"><header><div><span>НОРМАТИВНЫЙ КОНТРОЛЬ</span><h2>Специалист по НТД</h2></div><LibraryBig /></header><div className="agent-status"><i /><span><b>Подготовлен интерфейс</b><small>Агент начнёт проверку после подключения вашей базы НТД.</small></span></div><button disabled><ShieldCheck />Проверить раздел</button></section>
             </aside>
           </div>
 
-          <section className="quality-bar"><div><FileCheck2 /><span><b>Контроль документа</b><small>Проверки станут доступны после подключения шаблонов и НТД.</small></span></div><dl><div><dt>Разделы</dt><dd>0 / {sections.length}</dd></div><div><dt>Замечания</dt><dd>—</dd></div><div><dt>Нормативы</dt><dd>—</dd></div></dl><button disabled><Scale />Передать на проверку</button></section>
+          <section className="quality-bar"><div><FileCheck2 /><span><b>Контроль документа</b><small>Реестр и чек-лист сохраняются вместе с карточкой проекта.</small></span></div><dl><div><dt>Документы</dt><dd>{projectDraft?.documents.length || 0}</dd></div><div><dt>Чек-лист</dt><dd>{checklistDone} / {projectDraft?.checklist.length || 0}</dd></div><div><dt>Разделы</dt><dd>0 / {sections.length}</dd></div></dl><button disabled><Scale />Передать на проверку</button></section>
         </>}
       </section>
     </div>
