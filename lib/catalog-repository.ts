@@ -1,10 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { defaultCatalog, normalizeCatalog, orderedCatalog, TaskError, withHealthSphere, type Catalog } from './tasks';
+import { defaultCatalog, normalizeCatalog, orderedCatalog, TaskError, withHealthSphere, withPprDirection, type Catalog } from './tasks';
 
 let localCatalog: Catalog = structuredClone(defaultCatalog);
 const clone = (catalog: Catalog) => structuredClone(catalog);
 
-export async function getLocalCatalog() { return withHealthSphere(clone(localCatalog)); }
+function withSystemEntries(catalog: Catalog) { return withPprDirection(withHealthSphere(catalog)); }
+export async function getLocalCatalog() { return withSystemEntries(clone(localCatalog)); }
 export async function saveLocalCatalog(catalog: Catalog, revision: number) {
   if (localCatalog.revision !== revision) throw new TaskError('Каталог изменился в другой вкладке. Обновите страницу.', 409);
   localCatalog = { ...normalizeCatalog(catalog), revision: revision + 1 };
@@ -16,7 +17,7 @@ export async function getCloudCatalog(client: SupabaseClient, ownerId: string) {
   const { data, error } = await client.from('orbit_catalogs').select('payload, revision').eq('owner_id', ownerId).maybeSingle();
   if (error) throw new TaskError('Не удалось получить каталог сфер.', 502);
   if (!data) return clone(defaultCatalog);
-  return withHealthSphere({ ...orderedCatalog(normalizeCatalog((data as CatalogRow).payload)), revision: (data as CatalogRow).revision });
+  return withSystemEntries({ ...orderedCatalog(normalizeCatalog((data as CatalogRow).payload)), revision: (data as CatalogRow).revision });
 }
 export async function saveCloudCatalog(client: SupabaseClient, ownerId: string, catalog: Catalog, revision: number) {
   const normalized = normalizeCatalog(catalog);

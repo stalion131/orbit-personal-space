@@ -18,7 +18,7 @@ const sphereRows = [
 ] as const;
 const directionRows = [
   ['work-lab', 'work', 'Лаборатория Комнатного'], ['work-build', 'work', 'Сфера строительства'],
-  ['work-projects', 'work', 'Текущие проекты'], ['personal-flat', 'personal', 'Квартира'],
+  ['work-projects', 'work', 'Текущие проекты'], ['work-ppr', 'work', 'ППР'], ['personal-flat', 'personal', 'Квартира'],
   ['travel-search', 'travel', 'Поиск и бронирование билетов'], ['travel-routes', 'travel', 'Составление маршрутов'],
   ['travel-buy', 'travel', 'Покупка и бронирование билетов'],
 ] as const;
@@ -31,6 +31,10 @@ export function withHealthSphere(catalog: Catalog): Catalog {
   if (catalog.spheres.some(item => item.id === 'health')) return catalog;
   return { ...catalog, spheres: [...catalog.spheres, { id: 'health', name: 'Здоровье', color: '#14b8a6', order: catalog.spheres.length }] };
 }
+export function withPprDirection(catalog: Catalog): Catalog {
+  if (catalog.directions.some(item => item.sphereId === 'work' && item.name.trim().toLocaleLowerCase('ru') === 'ппр')) return catalog;
+  return { ...catalog, directions: [...catalog.directions, { id: 'work-ppr', sphereId: 'work', name: 'ППР', order: catalog.directions.length }] };
+}
 export function legacyDirectionId(sphere: string, subcategory: string) {
   const name = subcategory === 'Сфера строительства / Текущие проекты' ? 'Текущие проекты' : subcategory;
   return defaultCatalog.directions.find(item => item.sphereId === sphere && item.name === name)?.id;
@@ -39,11 +43,14 @@ export function legacyDirectionId(sphere: string, subcategory: string) {
 export type TaskEvent = { id: string; at: string; title: string; detail: string; actor: string };
 export type Proposal = { id: string; title: string; body: string; recipient: string; cost: string; state: 'pending' | 'approved' | 'rejected'; decidedAt?: string };
 export type Subtask = { id: string; title: string; dueDate: string | null; dueTime: string | null; completed: boolean; createdAt: string; completedAt: string | null };
+export const workProjectStages = ['source_data', 'structure', 'drafting', 'ntd_review', 'approval'] as const;
+export type WorkProjectStage = (typeof workProjectStages)[number];
+export type WorkProject = { documentType: 'ppr' | 'tk'; objectName: string; objectAddress: string; customer: string; responsible: string; stage: WorkProjectStage };
 export type Task = {
   id: string; title: string; description: string; sphere: string; directionId?: string; subcategory: string;
   dueDate: string | null; dueTime?: string | null; durationMinutes?: number; waitingFor?: string;
   queue: number; priority: Priority; focus: boolean; status: Status; demo: boolean; revision: number;
-  createdAt: string; updatedAt: string; events: TaskEvent[]; subtasks: Subtask[]; result?: string; proposal?: Proposal;
+  createdAt: string; updatedAt: string; events: TaskEvent[]; subtasks: Subtask[]; workProject?: WorkProject; result?: string; proposal?: Proposal;
 };
 export type Operation =
   | { op: 'complete' }
@@ -55,6 +62,7 @@ export type Operation =
   | { op: 'edit_subtask'; id: string; title: string; dueDate: string | null; dueTime: string | null }
   | { op: 'toggle_subtask'; id: string; value: boolean }
   | { op: 'delete_subtask'; id: string }
+  | { op: 'edit_work_project'; project: WorkProject }
   | { op: 'apply_agent_triage'; proposalId: string; nextAction: string; reason: string; dueDate: string | null; durationMinutes: number; priority: Priority; focus: boolean }
   | { op: 'decision'; proposalId: string; decision: 'approved' | 'rejected' };
 export type CreateTaskInput = {
@@ -77,11 +85,18 @@ function hydrateSubtasks(value: unknown): Subtask[] {
     return [{ id: candidate.id, title: candidate.title.trim().slice(0, 300), dueDate: (candidate.dueDate as string | null) ?? null, dueTime: (candidate.dueTime as string | null) ?? null, completed: Boolean(candidate.completed), createdAt: isIsoDate(candidate.createdAt) ? candidate.createdAt as string : new Date().toISOString(), completedAt: isIsoDate(candidate.completedAt) ? candidate.completedAt as string : null }];
   });
 }
+function hydrateWorkProject(value: unknown): WorkProject | undefined {
+  if (!isRecord(value)) return undefined;
+  const documentType = value.documentType === 'tk' ? 'tk' : 'ppr';
+  const stage = workProjectStages.includes(value.stage as WorkProjectStage) ? value.stage as WorkProjectStage : 'source_data';
+  const text = (field: string, limit: number) => typeof value[field] === 'string' ? String(value[field]).trim().slice(0, limit) : '';
+  return { documentType, objectName: text('objectName', 240), objectAddress: text('objectAddress', 300), customer: text('customer', 200), responsible: text('responsible', 160), stage };
+}
 export function hydrateTask(task: Task): Task {
   const status = normalizeStatus(task.status);
   return { ...task, directionId: task.directionId || legacyDirectionId(task.sphere, task.subcategory), dueTime: task.dueTime ?? null,
     durationMinutes: validDuration(task.durationMinutes) ? task.durationMinutes : 60, waitingFor: typeof task.waitingFor === 'string' ? task.waitingFor : '',
-    focus: Boolean(task.focus), status, subtasks: hydrateSubtasks(task.subtasks) };
+    focus: Boolean(task.focus), status, subtasks: hydrateSubtasks(task.subtasks), workProject: hydrateWorkProject(task.workProject) };
 }
 export function orderedCatalog(catalog: Catalog): Catalog { return { ...catalog, spheres: [...catalog.spheres].sort((a, b) => a.order - b.order), directions: [...catalog.directions].sort((a, b) => a.order - b.order) }; }
 export function normalizeCatalog(candidate: unknown): Catalog {
@@ -150,6 +165,10 @@ export function transition(task: Task, operation: Operation): Task {
     if (!item) throw new TaskError('Этап не найден.', 404);
     next.subtasks = next.subtasks.filter(subtask => subtask.id !== operation.id);
     next.events.push(event('Этап удалён', item.title, 'Вы'));
+  } else if (operation.op === 'edit_work_project') {
+    next.workProject = hydrateWorkProject(operation.project);
+    if (!next.workProject) throw new TaskError('Проверьте карточку рабочего проекта.');
+    next.events.push(event('Карточка проекта обновлена', `${next.workProject.documentType === 'ppr' ? 'ППР' : 'ТК'} · ${next.workProject.objectName || next.title}`, 'Вы'));
   } else if (operation.op === 'apply_agent_triage') {
     if (next.subtasks.length >= 100) throw new TaskError('В одной задаче можно хранить до 100 этапов.');
     if (next.subtasks.some(item => item.id === operation.proposalId)) throw new TaskError('Это предложение ИИ уже применено.', 409);

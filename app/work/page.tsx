@@ -18,6 +18,7 @@ import {
   LoaderCircle,
   Plus,
   RefreshCw,
+  Save,
   Scale,
   Search,
   ShieldCheck,
@@ -25,11 +26,17 @@ import {
   Upload,
 } from 'lucide-react';
 import { LoginScreen } from '@/components/login-screen';
-import { defaultCatalog, statuses, type Catalog, type Task } from '@/lib/tasks';
+import { defaultCatalog, statuses, type Catalog, type Task, type WorkProject, type WorkProjectStage } from '@/lib/tasks';
 import { useOrbitSession } from '@/lib/use-orbit-session';
 import './workspace.css';
 
 type DocumentKind = 'ppr' | 'tk';
+
+const projectStages: { id: WorkProjectStage; label: string }[] = [
+  { id: 'source_data', label: 'Исходные данные' }, { id: 'structure', label: 'Структура' },
+  { id: 'drafting', label: 'Разработка' }, { id: 'ntd_review', label: 'Проверка НТД' },
+  { id: 'approval', label: 'Согласование' },
+];
 
 const documentSections: Record<DocumentKind, string[]> = {
   ppr: ['Общие данные', 'Организация работ', 'Технология производства', 'Машины и механизмы', 'Контроль качества', 'Охрана труда'],
@@ -43,10 +50,12 @@ const professionalAgents = [
   { name: 'Контролёр качества', description: 'Ищет пропуски и противоречия', icon: ClipboardCheck, state: 'Следующий этап' },
 ];
 
-async function api<T>(path: string, token: string | null): Promise<T> {
-  const headers = new Headers({ 'X-Orbit-Client': 'dashboard' });
+async function api<T>(path: string, token: string | null, options: RequestInit = {}): Promise<T> {
+  const headers = new Headers(options.headers);
+  headers.set('X-Orbit-Client', 'dashboard');
+  headers.set('Content-Type', 'application/json');
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  const response = await fetch(path, { cache: 'no-store', headers });
+  const response = await fetch(path, { ...options, cache: 'no-store', headers });
   const value = await response.json() as { error?: string };
   if (!response.ok) throw new Error(value.error || 'Не удалось загрузить данные.');
   return value as T;
@@ -67,6 +76,10 @@ function taskProgress(task: Task) {
   return Math.round(task.subtasks.filter(item => item.completed).length / task.subtasks.length * 100);
 }
 
+function initialProject(task: Task): WorkProject {
+  return task.workProject || { documentType: taskKind(task), objectName: task.title, objectAddress: '', customer: '', responsible: '', stage: 'source_data' };
+}
+
 export default function WorkWorkspace() {
   const access = useOrbitSession();
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -75,6 +88,9 @@ export default function WorkWorkspace() {
   const [kind, setKind] = useState<DocumentKind>('ppr');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [projectDraft, setProjectDraft] = useState<WorkProject | null>(null);
+  const [projectSaving, setProjectSaving] = useState(false);
+  const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
 
   const load = async () => {
@@ -88,7 +104,8 @@ export default function WorkWorkspace() {
       ]);
       setTasks(taskData.tasks);
       setCatalog(catalogData.catalog);
-      const workTasks = taskData.tasks.filter(task => task.sphere === 'work');
+      const pprDirection = catalogData.catalog.directions.find(item => item.sphereId === 'work' && item.name.trim().toLocaleLowerCase('ru') === 'ппр');
+      const workTasks = taskData.tasks.filter(task => task.sphere === 'work' && task.directionId === pprDirection?.id);
       setSelectedId(current => workTasks.some(task => task.id === current) ? current : workTasks[0]?.id || '');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Нет соединения с сервером.');
@@ -99,17 +116,29 @@ export default function WorkWorkspace() {
 
   useEffect(() => { queueMicrotask(() => void load()); }, [access.loading, access.mode, access.accessToken]);
 
+  const pprDirection = catalog.directions.find(item => item.sphereId === 'work' && item.name.trim().toLocaleLowerCase('ru') === 'ппр');
   const workTasks = useMemo(() => tasks
-    .filter(task => task.sphere === 'work')
+    .filter(task => task.sphere === 'work' && task.directionId === pprDirection?.id)
     .filter(task => !query.trim() || task.title.toLocaleLowerCase('ru').includes(query.trim().toLocaleLowerCase('ru')))
     .sort((a, b) => Number(b.focus) - Number(a.focus) || (a.dueDate || '9999-12-31').localeCompare(b.dueDate || '9999-12-31')),
-  [tasks, query]);
-  const selected = tasks.find(task => task.id === selectedId) || workTasks[0];
+  [tasks, query, pprDirection?.id]);
+  const selected = tasks.find(task => task.id === selectedId && task.sphere === 'work' && task.directionId === pprDirection?.id) || workTasks[0];
   const selectedDirection = selected ? catalog.directions.find(item => item.id === selected.directionId)?.name : '';
   const progress = selected ? taskProgress(selected) : 0;
   const sections = documentSections[kind];
 
-  useEffect(() => { if (selected) setKind(taskKind(selected)); }, [selected?.id]);
+  useEffect(() => { if (selected) { const project = initialProject(selected); setProjectDraft(project); setKind(project.documentType); } else setProjectDraft(null); }, [selected?.id, selected?.revision]);
+
+  const saveProject = async () => {
+    if (!selected || !projectDraft || projectSaving) return;
+    setProjectSaving(true); setError(''); setNotice('');
+    try {
+      const data = await api<{ task: Task }>(`/api/tasks/${selected.id}`, access.accessToken, { method: 'PATCH', body: JSON.stringify({ op: 'edit_work_project', revision: selected.revision, project: projectDraft }) });
+      setTasks(current => current.map(task => task.id === data.task.id ? data.task : task));
+      setNotice('Карточка проекта сохранена.');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось сохранить карточку проекта.'); }
+    finally { setProjectSaving(false); }
+  };
 
   if (access.loading) return <main className="work-auth"><LoaderCircle className="spin" />Загружаем рабочее пространство…</main>;
   if (access.error || (access.mode === 'supabase' && !access.accessToken)) return <LoginScreen onSignIn={access.signIn} onSignUp={access.signUp} setupError={access.error} />;
@@ -118,13 +147,14 @@ export default function WorkWorkspace() {
     <header className="work-topbar">
       <div className="work-brand"><span><HardHat /></span><div><strong>ORBIT WORKS</strong><small>разработка ППР и ТК</small></div></div>
       <nav className="work-mode" aria-label="Режим документа">
-        <button className={kind === 'ppr' ? 'active' : ''} onClick={() => setKind('ppr')}>ППР</button>
-        <button className={kind === 'tk' ? 'active' : ''} onClick={() => setKind('tk')}>ТК</button>
+        <button className={kind === 'ppr' ? 'active' : ''} onClick={() => { setKind('ppr'); setProjectDraft(current => current ? { ...current, documentType: 'ppr' } : current); }}>ППР</button>
+        <button className={kind === 'tk' ? 'active' : ''} onClick={() => { setKind('tk'); setProjectDraft(current => current ? { ...current, documentType: 'tk' } : current); }}>ТК</button>
       </nav>
       <div className="work-top-actions"><button className="work-icon-button" aria-label="Обновить проекты" onClick={() => void load()} disabled={loading}><RefreshCw className={loading ? 'spin' : ''} /></button><Link href="/" className="work-back"><ArrowLeft />К задачам</Link></div>
     </header>
 
     {error && <div className="work-feedback"><CircleAlert />{error}</div>}
+    {notice && <div className="work-feedback work-success"><Check />{notice}</div>}
 
     <div className="work-shell">
       <aside className="work-sidebar">
@@ -134,7 +164,7 @@ export default function WorkWorkspace() {
           {workTasks.map(task => <button key={task.id} className={task.id === selected?.id ? 'active' : ''} onClick={() => setSelectedId(task.id)}>
             <span className="project-file"><FileText /></span><span><strong>{task.title}</strong><small>{catalog.directions.find(item => item.id === task.directionId)?.name || 'Без направления'}</small></span><ChevronRight />
           </button>)}
-          {!loading && !workTasks.length && <div className="side-empty"><FolderOpen /><span>В сфере «Работа» пока нет подходящих задач.</span></div>}
+          {!loading && !workTasks.length && <div className="side-empty"><FolderOpen /><span>Назначьте рабочей задаче направление «ППР» — после этого она появится здесь.</span></div>}
         </div>
         <Link href="/" className="new-work-task"><Plus />Добавить рабочую задачу</Link>
         <div className="side-heading agent-heading"><span>ПРОФЕССИОНАЛЬНЫЕ АГЕНТЫ</span></div>
@@ -142,14 +172,27 @@ export default function WorkWorkspace() {
       </aside>
 
       <section className="work-content">
-        {!selected ? <div className="work-empty"><FolderOpen /><h1>Выберите рабочий проект</h1><p>Создайте задачу в сфере «Работа», и она появится здесь автоматически.</p><Link href="/">Перейти к задачам</Link></div> : <>
+        {!selected ? <div className="work-empty"><FolderOpen /><h1>Проектов ППР пока нет</h1><p>В основном дашборде выберите для рабочей задачи направление «ППР».</p><Link href="/">Перейти к задачам</Link></div> : <>
           <header className="project-header">
             <div><span className="project-kicker">{kind === 'ppr' ? 'ПРОЕКТ ПРОИЗВОДСТВА РАБОТ' : 'ТЕХНОЛОГИЧЕСКАЯ КАРТА'}</span><h1>{selected.title}</h1><p>{selectedDirection || 'Без направления'} · {statuses[selected.status]} · {selected.dueDate ? `до ${dateLabel(selected.dueDate)}` : 'срок не задан'}</p></div>
             <div className="project-progress"><span><b>{progress}%</b> прогресс задачи</span><i><b style={{ width: `${progress}%` }} /></i></div>
           </header>
 
+          {projectDraft && <section className="project-card">
+            <header><div><span>КАРТОЧКА ПРОЕКТА</span><h2>Основные данные</h2></div><small>Сохраняется вместе с задачей Orbit</small></header>
+            <div className="project-fields">
+              <label><span>Вид документа</span><select value={projectDraft.documentType} onChange={event => { const documentType = event.target.value as DocumentKind; setProjectDraft({ ...projectDraft, documentType }); setKind(documentType); }}><option value="ppr">ППР</option><option value="tk">ТК</option></select></label>
+              <label className="project-field-wide"><span>Объект</span><input value={projectDraft.objectName} maxLength={240} onChange={event => setProjectDraft({ ...projectDraft, objectName: event.target.value })} placeholder="Название объекта" /></label>
+              <label className="project-field-wide"><span>Адрес объекта</span><input value={projectDraft.objectAddress} maxLength={300} onChange={event => setProjectDraft({ ...projectDraft, objectAddress: event.target.value })} placeholder="Адрес пока не указан" /></label>
+              <label><span>Заказчик</span><input value={projectDraft.customer} maxLength={200} onChange={event => setProjectDraft({ ...projectDraft, customer: event.target.value })} placeholder="Организация" /></label>
+              <label><span>Ответственный</span><input value={projectDraft.responsible} maxLength={160} onChange={event => setProjectDraft({ ...projectDraft, responsible: event.target.value })} placeholder="ФИО" /></label>
+              <label><span>Текущий этап</span><select value={projectDraft.stage} onChange={event => setProjectDraft({ ...projectDraft, stage: event.target.value as WorkProjectStage })}>{projectStages.map(stage => <option key={stage.id} value={stage.id}>{stage.label}</option>)}</select></label>
+              <button className="save-project" disabled={projectSaving} onClick={() => void saveProject()}>{projectSaving ? <LoaderCircle className="spin" /> : <Save />}{projectSaving ? 'Сохраняем…' : 'Сохранить карточку'}</button>
+            </div>
+          </section>}
+
           <div className="workflow-strip">
-            {['Исходные данные', 'Структура', 'Разработка', 'Проверка НТД', 'Согласование'].map((step, index) => <div className={index === 0 ? 'current' : ''} key={step}><span>{index === 0 ? <Check /> : index + 1}</span><b>{step}</b></div>)}
+            {projectStages.map((step, index) => { const currentIndex = projectStages.findIndex(item => item.id === projectDraft?.stage); return <div className={index === currentIndex ? 'current' : index < currentIndex ? 'complete' : ''} key={step.id}><span>{index < currentIndex ? <Check /> : index + 1}</span><b>{step.label}</b></div>; })}
           </div>
 
           <div className="work-grid">
