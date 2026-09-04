@@ -57,6 +57,7 @@ export const proposalKey = (p: FieldProposal) =>
 const normalizedTk = (value: string) =>
   value
     .trim()
+    .replace(/^[•●▪*–—-]\s*/, '')
     .replace(/[;.]$/, '')
     .replace(/\s+/g, ' ')
     .replace(/K/g, 'К')

@@ -104,3 +104,21 @@ test('Autofill preserves manual values, fills unknowns and retains proof without
   assert.equal(r.applied.length, 4);
   assert.equal(p.brief.equipment, '');
 });
+
+test('Manual TK bullet markers do not create duplicates during automatic fill', () => {
+  const project = {
+    brief: readWorkBrief({ tkList: ['• ТK №4 - Монтаж систем;'] }),
+  };
+  const p = {
+    field: 'brief.tkList',
+    value: 'ТК №4 - Монтаж систем',
+    fileHash: 'a'.repeat(64),
+    blockId: 'p1',
+    quote: 'ТК №4 - Монтаж систем',
+    reason: 'Источник',
+  };
+  assert.deepEqual(
+    applyProposals(project, project.brief, [p]).brief.tkList,
+    project.brief.tkList,
+  );
+});
