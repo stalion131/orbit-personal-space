@@ -1,4 +1,5 @@
 import { hydratePprDrafts, type SavedPprDraft } from './ppr-drafts';
+import { readWorkBrief, readBriefApprovals, readTkAssignments, type WorkBrief, type BriefApproval, type TkAssignment } from './work-brief';
 
 export const statuses = {
   active: 'Активная', waiting: 'Ожидает действия со стороны', paused: 'Приостановлена',
@@ -58,12 +59,14 @@ export type PprScheduleSource = (typeof pprScheduleSources)[number];
 export type WorkDocument = { id: string; name: string; category: WorkDocumentCategory; version: string; status: WorkDocumentStatus; updatedAt: string };
 export type WorkChecklistItem = { id: string; title: string; completed: boolean };
 export type WorkProject = {
+  brief?: WorkBrief;
   documentType: 'ppr' | 'tk'; objectName: string; objectAddress: string; customer: string; responsible: string; stage: WorkProjectStage;
   developmentMode: PprDevelopmentMode; workType: string; baseTemplatePath: string; scheduleSource: PprScheduleSource;
   hasWorkAtHeight: boolean; hasLiftingStructures: boolean; usesTowerCrane: boolean; hasMonolithicWork: boolean;
   documents: WorkDocument[]; checklist: WorkChecklistItem[];
 };
 export type Task = {
+  briefApprovals?: BriefApproval[]; tkAssignments?: TkAssignment[];
   id: string; title: string; description: string; sphere: string; directionId?: string; subcategory: string;
   dueDate: string | null; dueTime?: string | null; durationMinutes?: number; waitingFor?: string;
   queue: number; priority: Priority; focus: boolean; status: Status; demo: boolean; revision: number;
@@ -109,6 +112,8 @@ function hydrateWorkProject(value: unknown): WorkProject | undefined {
   const developmentMode = pprDevelopmentModes.includes(value.developmentMode as PprDevelopmentMode) ? value.developmentMode as PprDevelopmentMode : 'undecided';
   const scheduleSource = pprScheduleSources.includes(value.scheduleSource as PprScheduleSource) ? value.scheduleSource as PprScheduleSource : 'unknown';
   const usesTowerCrane = Boolean(value.usesTowerCrane);
+  const brief = readWorkBrief(value.brief, value as Partial<WorkProject>);
+  if (usesTowerCrane) brief.risks.lifting = 'yes';
   const text = (field: string, limit: number) => typeof value[field] === 'string' ? String(value[field]).trim().slice(0, limit) : '';
   const documents = Array.isArray(value.documents) ? value.documents.flatMap(candidate => {
     if (!isRecord(candidate) || typeof candidate.id !== 'string' || typeof candidate.name !== 'string' || !candidate.name.trim()) return [];
@@ -123,8 +128,8 @@ function hydrateWorkProject(value: unknown): WorkProject | undefined {
   return {
     documentType, objectName: text('objectName', 240), objectAddress: text('objectAddress', 300), customer: text('customer', 200), responsible: text('responsible', 160), stage,
     developmentMode, workType: text('workType', 300), baseTemplatePath: text('baseTemplatePath', 1000), scheduleSource,
-    hasWorkAtHeight: Boolean(value.hasWorkAtHeight), hasLiftingStructures: Boolean(value.hasLiftingStructures) || usesTowerCrane, usesTowerCrane, hasMonolithicWork: Boolean(value.hasMonolithicWork),
-    documents, checklist,
+    hasWorkAtHeight: brief.risks.height === 'yes', hasLiftingStructures: brief.risks.lifting === 'yes', usesTowerCrane, hasMonolithicWork: Boolean(value.hasMonolithicWork),
+    documents, checklist, brief,
   };
 }
 
@@ -139,10 +144,12 @@ export function defaultWorkChecklist(): WorkChecklistItem[] {
 export function hydrateTask(task: Task): Task {
   const status = normalizeStatus(task.status);
   const pprDrafts = hydratePprDrafts(task.pprDrafts);
+  const briefApprovals = readBriefApprovals(task.briefApprovals);
+  const tkAssignments = readTkAssignments(task.tkAssignments, briefApprovals);
   if (pprDrafts.some(draft => draft.taskId !== task.id)) throw new TaskError('Версия ППР относится к другому проекту.', 409);
   return { ...task, directionId: task.directionId || legacyDirectionId(task.sphere, task.subcategory), dueTime: task.dueTime ?? null,
     durationMinutes: validDuration(task.durationMinutes) ? task.durationMinutes : 60, waitingFor: typeof task.waitingFor === 'string' ? task.waitingFor : '',
-    focus: Boolean(task.focus), status, subtasks: hydrateSubtasks(task.subtasks), workProject: hydrateWorkProject(task.workProject), pprDrafts };
+    focus: Boolean(task.focus), status, subtasks: hydrateSubtasks(task.subtasks), workProject: hydrateWorkProject(task.workProject), pprDrafts, briefApprovals, tkAssignments };
 }
 export function orderedCatalog(catalog: Catalog): Catalog { return { ...catalog, spheres: [...catalog.spheres].sort((a, b) => a.order - b.order), directions: [...catalog.directions].sort((a, b) => a.order - b.order) }; }
 export function normalizeCatalog(candidate: unknown): Catalog {

@@ -36,7 +36,7 @@ const provider = createServer(async (req, res) => {
   if (failModel) { res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: { message: 'PRIVATE_PROVIDER_ERROR_MARKER', type: 'invalid_request_error' } })); return; }
   res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
     id: `resp_${randomUUID()}`, object: 'response', created_at: Math.floor(Date.now() / 1000), status: 'completed', model: 'gpt-4o-mini',
-    output: [{ id: 'msg_fixture', type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify({ paragraphs: [source, 'Уточнить исходные данные учебного объекта.'], questions: ['Уточнить перечень работ.'], warnings: [] }), annotations: [] }] }],
+    output: [{ id: 'msg_fixture', type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(JSON.stringify(modelRequests.at(-1).input).includes('previousDialogue') ? { overview: 'Нужно уточнить условия площадки.', readiness: 'needs_data', sections: [], missingInformation: [], questions: ['Уточните численность.'], handoffs: [], warnings: [] } : { paragraphs: [source, 'Уточнить исходные данные учебного объекта.'], questions: ['Уточнить перечень работ.'], warnings: [] }), annotations: [] }] }],
     usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } },
   }));
 });
@@ -73,7 +73,7 @@ const create = (description, directionId = 'work-ppr') => api('/api/tasks', { me
 } });
 const project = { documentType: 'ppr', objectName: 'Учебный объект', objectAddress: '', customer: '', responsible: '', stage: 'drafting',
   developmentMode: 'without_tk', workType: 'Подготовительные работы', baseTemplatePath: 'template.docx', scheduleSource: 'contractor',
-  hasWorkAtHeight: false, hasLiftingStructures: false, usesTowerCrane: false, hasMonolithicWork: false, documents: [], checklist: [] };
+  hasWorkAtHeight: false, hasLiftingStructures: false, usesTowerCrane: false, hasMonolithicWork: false, documents: [], checklist: [], brief: { code: 'ППР-ТЕСТ', title: 'Учебный ППР', methods: 'Тестовый метод', workingFolder: 'PRIVATE_FOLDER_DO_NOT_SEND' } };
 try {
   let ready = false;
   let readinessStatus = '';
@@ -99,6 +99,14 @@ try {
   ({ task } = await api(`/api/tasks/${task.id}`, { method: 'PATCH', data: { op: 'edit_work_project', revision: task.revision, project } }));
   const input = () => ({ taskId: task.id, revision: task.revision, sectionId: 'general', templatePath: preview.path, textHash: preview.textHash, sourceHash: preview.sourceHash, chunkIds: ['fragment-1'], confirmDataTransfer: true });
   const generate = (data = input(), status = 200) => api('/api/agents/ppr-section', { method: 'POST', data, status });
+  const brief = (op = 'approve', status = 200, extra = {}) => api(`/api/tasks/${task.id}/work-brief`, { method: 'POST', status, data: { op, revision: task.revision, confirm: true, acknowledgeOpenQuestions: true, ...extra } });
+  await generate(input(), 409);
+  await brief('approve', 400, { confirm: false });
+  await brief('approve', 400, { acknowledgeOpenQuestions: false });
+  await brief('approve', 409, { revision: task.revision - 1 });
+  ({ task } = await brief());
+  await brief('approve', 409);
+  await brief('prepare_tk', 409);
   await generate({ ...input(), confirmDataTransfer: false }, 400);
   await generate({ ...input(), taskId: unrelated.id, revision: unrelated.revision }, 409);
   await generate({ ...input(), sectionId: 'graphics' }, 400);
@@ -114,7 +122,8 @@ try {
   assert.equal(modelRequests[0].store, false);
   const sent = JSON.stringify(modelRequests[0]);
   assert.ok(sent.includes(source));
-  for (const forbidden of [unselected, unrelated.description, 'fixture-only-not-a-real-key', library]) assert.ok(!sent.includes(forbidden), `Unexpected input: ${forbidden}`);
+  for (const forbidden of [unselected, unrelated.description, 'fixture-only-not-a-real-key', library, 'PRIVATE_FOLDER_DO_NOT_SEND']) assert.ok(!sent.includes(forbidden), `Unexpected input: ${forbidden}`);
+  assert.ok(sent.includes('Тестовый метод'));
   assert.equal(draft.paragraphs[0].changed, false);
   assert.equal(draft.paragraphs[1].changed, true);
   const save = (data, status = 201) => api(`/api/tasks/${task.id}/ppr-drafts`, { method: 'POST', data, status });
@@ -130,12 +139,36 @@ try {
   await save(saveInput, 409);
   const reloaded = (await api('/api/tasks')).tasks.find(item => item.id === task.id);
   assert.deepEqual(reloaded.pprDrafts, task.pprDrafts);
+  assert.deepEqual(reloaded.briefApprovals, task.briefApprovals);
   ({ task } = await api(`/api/tasks/${task.id}`, { method: 'PATCH', data: { op: 'edit_work_project', revision: task.revision, project: { ...project, responsible: 'Учебный инженер' } } }));
   assert.equal(task.pprDrafts.length, 1, 'Passport edits must preserve draft history.');
+  assert.equal(task.briefApprovals.length, 1, 'Editing must preserve the previous brief snapshot.');
+  await generate(input(), 409);
+  ({ task } = await brief());
+  assert.equal(task.briefApprovals.length, 2);
   const second = (await generate()).draft;
   ({ task } = await save({ draft: second, revision: task.revision, confirmSave: true }));
   assert.deepEqual(task.pprDrafts.map(item => item.version), [1, 2]);
   assert.equal(task.pprDrafts[0].paragraphs[1].text, draft.paragraphs[1].text, 'Saving v2 must not overwrite v1.');
+  const chatData = { taskId: task.id, revision: task.revision, question: 'Что нужно уточнить?', dialogue: [], confirmDataTransfer: true };
+  await api('/api/agents/ppr-developer', { method: 'POST', data: { ...chatData, question: 'a'.repeat(2001) }, status: 400 });
+  await api('/api/agents/ppr-developer', { method: 'POST', data: { ...chatData, revision: 0 }, status: 409 });
+  const chat = await api('/api/agents/ppr-developer', { method: 'POST', data: chatData });
+  assert.ok(chat.result.overview.includes('площадки')); assert.ok(chat.result.sections.length > 0);
+  assert.ok(!JSON.stringify(modelRequests.at(-1)).includes('PRIVATE_FOLDER_DO_NOT_SEND'));
+  ({ task } = await api(`/api/tasks/${task.id}`, { method: 'PATCH', data: { op: 'edit_work_project', revision: task.revision, project: { ...task.workProject, developmentMode: 'with_tk', brief: { ...task.workProject.brief, tkList: ['ТК земляные', 'ТК монолит'] } } } }));
+  await brief('prepare_tk', 409);
+  ({ task } = await brief());
+  ({ task } = await brief('prepare_tk'));
+  assert.equal(task.tkAssignments.length, 2);
+  assert.equal(task.tkAssignments[0].status, 'prepared');
+  assert.equal(task.tkAssignments[0].executor, 'tk_developer');
+  await brief('prepare_tk', 409);
+  ({ task } = await api(`/api/tasks/${task.id}`, { method: 'PATCH', data: { op: 'edit_work_project', revision: task.revision, project: { ...task.workProject, stage: 'structure' } } }));
+  await brief('approve', 409); // stage-only change does not require a new approval
+  assert.equal(task.tkAssignments.length, 2); assert.equal(task.pprDrafts.length, 2);
+  const afterTk = (await api('/api/tasks')).tasks.find(v => v.id === task.id);
+  assert.deepEqual(afterTk.tkAssignments, task.tkAssignments);
   failModel = true;
   const providerFailure = await generate(input(), 502);
   assert.ok(!JSON.stringify(providerFailure).includes('PRIVATE_PROVIDER_ERROR_MARKER'));

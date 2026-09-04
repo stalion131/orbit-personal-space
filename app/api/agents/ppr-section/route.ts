@@ -5,6 +5,7 @@ import { draftPprSection } from '@/lib/ppr-developer-agent';
 import { evaluatePprReadiness } from '@/lib/ppr-methodology';
 import { requirePprProject } from '@/lib/ppr-project-access';
 import { TaskError } from '@/lib/tasks';
+import { isBriefApproved } from '@/lib/work-brief';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -18,6 +19,7 @@ export async function POST(request: Request) {
     if (!Array.isArray(data.chunkIds) || !data.chunkIds.length || data.chunkIds.length > 8 || data.chunkIds.some(id => typeof id !== 'string') || new Set(data.chunkIds).size !== data.chunkIds.length) throw new TaskError('Выберите от 1 до 8 разных фрагментов.');
     const task = await requirePprProject(access, data.taskId);
     if (task.revision !== data.revision) throw new TaskError('Проект изменился. Сохраните паспорт и подтвердите отправку заново.', 409);
+    if (!isBriefApproved(task, task.workProject)) throw new TaskError('Сначала утвердите актуальную редакцию ТЗ.', 409);
     if (!evaluatePprReadiness(task.workProject).ready) throw new TaskError('Перед генерацией заполните объект, вид работ и режим ППР.', 409);
     if (task.workProject.baseTemplatePath !== data.templatePath) throw new TaskError('Сначала сохраните выбранный шаблон в паспорте проекта.', 409);
     const preview = await readTemplatePreview(request, data.templatePath);

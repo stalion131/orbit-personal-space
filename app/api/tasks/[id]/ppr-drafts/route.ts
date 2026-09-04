@@ -6,6 +6,7 @@ import { requirePprProject } from '@/lib/ppr-project-access';
 import { saveTask } from '@/lib/repository';
 import { saveCloudTask } from '@/lib/supabase-repository';
 import { event, TaskError } from '@/lib/tasks';
+import { isBriefApproved } from '@/lib/work-brief';
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -17,6 +18,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     try { draft = parsePprDraft(data.draft); } catch { throw new TaskError('Черновик имеет неверный формат или превышает допустимый размер.'); }
     if (draft.taskId !== id) throw new TaskError('Черновик относится к другому проекту.', 409);
     const task = await requirePprProject(access, id);
+    if (!isBriefApproved(task, task.workProject)) throw new TaskError('Актуальная редакция ТЗ должна быть утверждена.', 409);
     if (task.pprDrafts?.some(item => item.id === draft.id)) throw new TaskError('Эта версия уже сохранена. Обновите список версий.', 409);
     if (task.revision !== data.revision || draft.sourceRevision !== task.revision) throw new TaskError('Проект изменился после генерации. Сформируйте черновик по актуальным данным.', 409);
     if ((task.pprDrafts?.length || 0) >= 20) throw new TaskError('Достигнут лимит MVP: 20 сохранённых версий на проект.', 409);

@@ -39,8 +39,8 @@ export function buildPprSectionPlan(project: WorkProject): PprSectionPlan[] {
     { id: 'schedules', title: 'Приложение. Графики производства и ресурсов', treatment: 'conditional', note: scheduleNote },
     { id: 'graphics', title: 'Приложение. Графическая часть / ситуационный план', treatment: 'manual', note: 'Разрабатывается вручную в AutoCAD; агент готовит только задание и перечень схем.' },
   ];
-  if (project.hasWorkAtHeight) sections.push({ id: 'height', title: 'Приложение. План производства работ на высоте', treatment: 'conditional', note: 'Включается, поскольку отмечено наличие работ на высоте.' });
-  if (project.hasLiftingStructures) sections.push({ id: 'lifting', title: 'Приложение. План работ с применением подъёмных сооружений', treatment: 'conditional', note: 'Включается, поскольку отмечено применение подъёмных сооружений.' });
+  if (project.hasWorkAtHeight || project.brief?.risks.height !== 'no') sections.push({ id: 'height', title: 'Приложение. План производства работ на высоте', treatment: 'conditional', note: project.hasWorkAtHeight ? 'Включается, поскольку отмечено наличие работ на высоте.' : 'Наличие работ на высоте не определено. Уточнить до решения о составе приложения.' });
+  if (project.hasLiftingStructures || project.brief?.risks.lifting !== 'no') sections.push({ id: 'lifting', title: 'Приложение. План работ с применением подъёмных сооружений', treatment: 'conditional', note: project.hasLiftingStructures ? 'Включается, поскольку отмечено применение подъёмных сооружений.' : 'Применение подъёмных сооружений не определено. Уточнить до решения о составе приложения.' });
   if (project.usesTowerCrane) sections.push({ id: 'tower-crane', title: 'Ссылка на ППРк башенного крана', treatment: 'reference', note: 'Не разрабатывать крановый ППР повторно; запросить и указать утверждённый ППРк.' });
   return sections;
 }
@@ -66,8 +66,8 @@ export function evaluatePprReadiness(project: WorkProject): PprReadiness {
   ].filter(Boolean) as string[];
   const appliedRules = [
     project.developmentMode === 'with_tk' ? 'Раздел 5 не дублирует технологию и ссылается на ТК.' : project.developmentMode === 'without_tk' ? 'Технология полностью раскрывается в разделе 5.' : 'Режим раздела 5 ещё не определён.',
-    project.hasWorkAtHeight ? 'Нужен план производства работ на высоте.' : 'План работ на высоте не включён.',
-    project.hasLiftingStructures ? 'Нужен план с применением подъёмных сооружений.' : 'План с подъёмными сооружениями не включён.',
+    project.hasWorkAtHeight ? 'Нужен план производства работ на высоте.' : project.brief?.risks.height === 'no' ? 'Работы на высоте исключены в текущем ТЗ.' : 'Наличие работ на высоте требует уточнения; отсутствие не подтверждено.',
+    project.hasLiftingStructures ? 'Нужен план с применением подъёмных сооружений.' : project.brief?.risks.lifting === 'no' ? 'Подъёмные сооружения исключены в текущем ТЗ.' : 'Применение подъёмных сооружений требует уточнения; отсутствие не подтверждено.',
     project.usesTowerCrane ? 'Нужна ссылка на утверждённый ППРк башенного крана.' : 'Ссылка на ППРк не требуется по текущим данным.',
     project.hasMonolithicWork ? 'Не выполнять расчёт опалубки и прогрева; дать только общие данные выбранного способа.' : 'Ограничения для монолитных работ не применены.',
     'Графическая часть остаётся ручной работой в AutoCAD.',

@@ -1,447 +1,1113 @@
 'use client';
 /* oxlint-disable react/react-compiler, react-compiler/effect-set-state, react-hooks/exhaustive-deps */
-
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Bot,
   Check,
-  ChevronRight,
-  CircleAlert,
-  CircleCheckBig,
   ClipboardCheck,
   Download,
-  FileCheck2,
   FileText,
   FolderOpen,
-  HardDrive,
   HardHat,
   LibraryBig,
-  ListChecks,
   LoaderCircle,
   Plus,
   RefreshCw,
   Save,
-  Scale,
-  Search,
   ShieldCheck,
-  Sparkles,
-  Send,
   Trash2,
-  TriangleAlert,
-  Upload,
-  X,
 } from 'lucide-react';
 import { LoginScreen } from '@/components/login-screen';
-import { DraftText, PprSectionStudio } from '@/components/ppr-section-studio';
-import { draftableSectionIds } from '@/lib/ppr-drafts';
-import type { PprDeveloperResult } from '@/lib/ppr-agent-types';
-import { buildPprSectionPlan, evaluatePprReadiness, pprModeLabels, pprScheduleLabels } from '@/lib/ppr-methodology';
-import { defaultCatalog, defaultWorkChecklist, statuses, type Catalog, type PprDevelopmentMode, type PprScheduleSource, type Task, type WorkDocumentCategory, type WorkDocumentStatus, type WorkProject, type WorkProjectStage } from '@/lib/tasks';
+import { WorkBriefForm, downloadJson } from '@/components/work-brief-form';
+import { WorkLibrary } from '@/components/work-library';
+import { WorkProjectDialog } from '@/components/work-project-dialog';
+import { PprSectionStudio } from '@/components/ppr-section-studio';
+import { workApi } from '@/lib/work-client';
+import { briefIssues, isBriefApproved, readWorkBrief } from '@/lib/work-brief';
+import { buildPprSectionPlan } from '@/lib/ppr-methodology';
+import {
+  defaultCatalog,
+  defaultWorkChecklist,
+  statuses,
+  type Catalog,
+  type Task,
+  type WorkDocumentCategory,
+  type WorkDocumentStatus,
+  type WorkProject,
+  type WorkProjectStage,
+} from '@/lib/tasks';
 import { useOrbitSession } from '@/lib/use-orbit-session';
-import './workspace.css';
 import './ppr-studio.css';
+import './work-v2.css';
 
-type DocumentKind = 'ppr' | 'tk';
-type LocalFileItem = { name: string; path: string; kind: 'directory' | 'file'; extension: string; size: number | null; modifiedAt: string };
-type LocalLibrary = { enabled: boolean; rootName?: string; path?: string; items: LocalFileItem[] };
-type LocalIndexSummary = { total: number; indexed: number; needsConversion: number; errors: number; characters: number };
-type LocalSearchResult = { name: string; path: string; extension: string; score: number; snippet: string };
-type LocalSearch = { enabled: boolean; available: boolean; summary?: LocalIndexSummary; results: LocalSearchResult[] };
-
-const projectStages: { id: WorkProjectStage; label: string }[] = [
-  { id: 'source_data', label: 'Исходные данные' }, { id: 'structure', label: 'Структура' },
-  { id: 'drafting', label: 'Разработка' }, { id: 'ntd_review', label: 'Проверка НТД' },
+const stages: { id: WorkProjectStage; label: string }[] = [
+  { id: 'source_data', label: 'Исходные данные' },
+  { id: 'structure', label: 'Структура' },
+  { id: 'drafting', label: 'Разработка' },
+  { id: 'ntd_review', label: 'Проверка НТД' },
   { id: 'approval', label: 'Согласование' },
 ];
-
-const documentSections: Record<DocumentKind, string[]> = {
-  ppr: ['Общие данные', 'Организация работ', 'Технология производства', 'Машины и механизмы', 'Контроль качества', 'Охрана труда'],
-  tk: ['Область применения', 'Организация процесса', 'Технологические операции', 'Материалы и механизмы', 'Контроль качества', 'Охрана труда'],
+const categories: Record<WorkDocumentCategory, string> = {
+  source: 'Исходные данные',
+  template: 'Шаблон',
+  ntd: 'НТД',
+  draft: 'Черновик',
+  final: 'Готовый документ',
 };
-
-const documentCategoryLabels: Record<WorkDocumentCategory, string> = {
-  source: 'Исходные данные', template: 'Шаблон', ntd: 'НТД', draft: 'Черновик', final: 'Готовый документ',
+const documentStatuses: Record<WorkDocumentStatus, string> = {
+  expected: 'Ожидается',
+  available: 'Получен',
+  review: 'На проверке',
+  approved: 'Проверен вручную',
 };
-const documentStatusLabels: Record<WorkDocumentStatus, string> = {
-  expected: 'Ожидается', available: 'Получен', review: 'На проверке', approved: 'Проверен',
-};
-const pprHandoffLabels = {
-  ntd_specialist: 'Специалист по НТД', quality_controller: 'Контролёр качества',
-  autocad_specialist: 'Специалист AutoCAD', contractor: 'Подрядчик / владелец проекта',
-} as const;
-
-const professionalAgents = [
-  { name: 'Разработчик ППР', description: 'Проверяет исходные данные и строит карту ППР', icon: HardHat, state: 'Контракт MVP готов' },
-  { name: 'Разработчик ТК', description: 'Готовит технологическую карту', icon: FileText, state: 'Следующий этап' },
-  { name: 'Специалист по НТД', description: 'Проверяет требования по вашей базе', icon: LibraryBig, state: 'Ждёт базу НТД' },
-  { name: 'Контролёр качества', description: 'Ищет пропуски и противоречия', icon: ClipboardCheck, state: 'Следующий этап' },
+const agents = [
+  {
+    name: 'Разработчик ППР',
+    description: 'Уточнения, карта ППР и черновики разделов',
+    icon: HardHat,
+    state: 'MVP · требуется ключ OpenAI',
+  },
+  {
+    name: 'Разработчик ТК',
+    description: 'Отдельные технологические карты по заданию ППР',
+    icon: FileText,
+    state: 'Следующий этап',
+  },
+  {
+    name: 'Специалист по НТД',
+    description: 'Требования и ссылки на нормативные документы',
+    icon: LibraryBig,
+    state: 'Ждёт базу НТД',
+  },
+  {
+    name: 'Контролёр качества',
+    description: 'Полнота разделов и отсутствие противоречий',
+    icon: ClipboardCheck,
+    state: 'Следующий этап',
+  },
 ];
-
-async function api<T>(path: string, token: string | null, options: RequestInit = {}): Promise<T> {
-  const headers = new Headers(options.headers);
-  headers.set('X-Orbit-Client', 'dashboard');
-  headers.set('Content-Type', 'application/json');
-  if (token) headers.set('Authorization', `Bearer ${token}`);
-  const response = await fetch(path, { ...options, cache: 'no-store', headers });
-  const value = await response.json() as { error?: string };
-  if (!response.ok) throw new Error(value.error || 'Не удалось загрузить данные.');
-  return value as T;
-}
-
-function taskKind(task: Task): DocumentKind {
-  return /(^|\s)тк([\s.,]|$)|технологическ/i.test(task.title) ? 'tk' : 'ppr';
-}
-
-function dateLabel(value: string | null) {
-  if (!value) return 'Срок не задан';
-  return new Date(`${value}T12:00:00`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
-}
-
-function taskProgress(task: Task) {
-  if (task.status === 'completed') return 100;
-  if (!task.subtasks?.length) return 0;
-  return Math.round(task.subtasks.filter(item => item.completed).length / task.subtasks.length * 100);
-}
-
-function fileSize(value: number | null) {
-  if (value === null) return '';
-  if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} КБ`;
-  return `${(value / 1024 / 1024).toFixed(1)} МБ`;
-}
-
 function initialProject(task: Task): WorkProject {
-  return task.workProject || {
-    documentType: taskKind(task), objectName: task.title, objectAddress: '', customer: '', responsible: '', stage: 'source_data',
-    developmentMode: 'undecided', workType: '', baseTemplatePath: '', scheduleSource: 'unknown',
-    hasWorkAtHeight: false, hasLiftingStructures: false, usesTowerCrane: false, hasMonolithicWork: false,
-    documents: [], checklist: defaultWorkChecklist(),
+  const p =
+    task.workProject ||
+    ({
+      documentType: /(^|\s)тк([\s.,]|$)|технологическ/i.test(task.title)
+        ? 'tk'
+        : 'ppr',
+      objectName: task.title,
+      objectAddress: '',
+      customer: '',
+      responsible: '',
+      stage: 'source_data',
+      developmentMode: 'undecided',
+      workType: '',
+      baseTemplatePath: '',
+      scheduleSource: 'unknown',
+      hasWorkAtHeight: false,
+      hasLiftingStructures: false,
+      usesTowerCrane: false,
+      hasMonolithicWork: false,
+      documents: [],
+      checklist: defaultWorkChecklist(),
+    } as WorkProject);
+  return { ...p, brief: p.brief || readWorkBrief(undefined, p) };
+}
+function scrollTo(id: string) {
+  document
+    .getElementById(id)
+    ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+function date(value: string | null) {
+  return value
+    ? new Date(`${value}T12:00:00`).toLocaleDateString('ru-RU', {
+        day: 'numeric',
+        month: 'long',
+      })
+    : 'Срок не задан';
+}
+
+function ProjectWorkspace({
+  task,
+  token,
+  cloud,
+  onSaved,
+  onDirty,
+}: {
+  task: Task;
+  token: string | null;
+  cloud: boolean;
+  onSaved: (t: Task) => void;
+  onDirty: (dirty: boolean) => void;
+}) {
+  const [project, setProject] = useState(() => initialProject(task));
+  const [baseline, setBaseline] = useState(() => initialProject(task));
+  const [revision, setRevision] = useState(task.revision);
+  const [studioBusy, setStudioBusy] = useState(false);
+  const [busy, setBusy] = useState(false),
+    [notice, setNotice] = useState(''),
+    [error, setError] = useState('');
+  const [panel, setPanel] = useState(''),
+    [section, setSection] = useState('general');
+  const [documentName, setDocumentName] = useState(''),
+    [category, setCategory] = useState<WorkDocumentCategory>('source'),
+    [checkTitle, setCheckTitle] = useState('');
+  const [library, setLibrary] = useState<{
+    enabled: boolean;
+    templates: { path: string; name: string }[];
+  }>({ enabled: false, templates: [] });
+  const dirty =
+    !task.workProject || JSON.stringify(project) !== JSON.stringify(baseline);
+  const conflict = revision !== task.revision;
+  const approved = isBriefApproved(task, project);
+  const plan = buildPprSectionPlan(project);
+  const activeSection = plan.find((s) => s.id === section) || plan[0];
+  const checksDone = project.checklist.filter((c) => c.completed).length;
+  const approval = task.briefApprovals?.at(-1);
+  const assignments = task.tkAssignments || [];
+  const latestAssignments = assignments.filter(
+    (a) => a.briefId === approval?.id,
+  );
+  const update = (p: WorkProject) => {
+    if (busy || studioBusy || conflict) return;
+    setProject(p);
+    setNotice('');
   };
+  const accept = (t: Task) => {
+    const p = initialProject(t);
+    setProject(p);
+    setBaseline(p);
+    setRevision(t.revision);
+    onSaved(t);
+  };
+  useEffect(() => {
+    onDirty(dirty || busy || studioBusy);
+    return () => onDirty(false);
+  }, [dirty, busy, studioBusy]);
+  useEffect(() => {
+    const unload = (e: BeforeUnloadEvent) => {
+      if (dirty || busy || studioBusy) e.preventDefault();
+    };
+    window.addEventListener('beforeunload', unload);
+    return () => window.removeEventListener('beforeunload', unload);
+  }, [dirty, busy, studioBusy]);
+  useEffect(() => {
+    let alive = true;
+    workApi<typeof library>('/api/work-templates', token)
+      .then((v) => {
+        if (alive) setLibrary(v);
+      })
+      .catch(() => {
+        /* The library panel offers a detailed retry. */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [token]);
+  const save = async () => {
+    if (busy || studioBusy || conflict) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const data = await workApi<{ task: Task }>(
+        `/api/tasks/${task.id}`,
+        token,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ op: 'edit_work_project', revision, project }),
+        },
+      );
+      accept(data.task);
+      setNotice('ТЗ и данные проекта сохранены.');
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : 'Не удалось сохранить изменения.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  const briefAction = async (op: 'approve' | 'prepare_tk') => {
+    if (busy || studioBusy || dirty || conflict) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const data = await workApi<{ task: Task }>(
+        `/api/tasks/${task.id}/work-brief`,
+        token,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            op,
+            revision,
+            confirm: true,
+            acknowledgeOpenQuestions: true,
+          }),
+        },
+      );
+      accept(data.task);
+      setNotice(
+        op === 'approve'
+          ? 'Редакция ТЗ утверждена для разработки и сохранена в истории.'
+          : 'Задания по ТК подготовлены. Исполнитель пока не подключён; автоматический запуск не выполнялся.',
+      );
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : 'Не удалось выполнить действие.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  const addDocument = () => {
+    if (!documentName.trim() || project.documents.length >= 100) return;
+    update({
+      ...project,
+      documents: [
+        ...project.documents,
+        {
+          id: crypto.randomUUID(),
+          name: documentName.trim(),
+          category,
+          status: 'expected',
+          version: '1.0',
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+    });
+    setDocumentName('');
+  };
+  const addCheck = () => {
+    if (!checkTitle.trim() || project.checklist.length >= 60) return;
+    update({
+      ...project,
+      checklist: [
+        ...project.checklist,
+        { id: crypto.randomUUID(), title: checkTitle.trim(), completed: false },
+      ],
+    });
+    setCheckTitle('');
+  };
+  const stepIndex = !approved
+    ? 0
+    : Math.max(1, stages.findIndex((s) => s.id === project.stage) + 1);
+  const emptyDocument = (
+    <article className="work-paper">
+      <div className="paper-meta">
+        {project.documentType.toUpperCase()} ·{' '}
+        {project.brief?.code || 'Шифр не указан'}
+      </div>
+      <h2>{project.brief?.title || project.objectName}</h2>
+      <p>{project.objectAddress || 'Адрес объекта — уточнить'}</p>
+      <div className="paper-line" />
+      <h3>
+        {project.documentType === 'ppr'
+          ? activeSection.title
+          : 'Технологическая карта'}
+      </h3>
+      <table>
+        <tbody>
+          <tr>
+            <th>Объект</th>
+            <td>{project.objectName || 'Уточнить'}</td>
+          </tr>
+          <tr>
+            <th>Подрядчик</th>
+            <td>{project.brief?.contractor.organization || 'Уточнить'}</td>
+          </tr>
+          <tr>
+            <th>Основной вид работ</th>
+            <td>{project.workType || 'Уточнить'}</td>
+          </tr>
+          <tr>
+            <th>Базовый шаблон</th>
+            <td>{project.baseTemplatePath || 'Не выбран'}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div className="paper-placeholder">
+        <FileText />
+        <strong>Здесь будет содержание раздела</strong>
+        <p>
+          {project.documentType === 'ppr'
+            ? activeSection.note
+            : 'Разработчик ТК будет подключён отдельно.'}
+        </p>
+      </div>
+      <p className="paper-note">
+        Каркас предпросмотра. Таблицы из DOCX ещё не импортированы. Новые и
+        изменённые абзацы черновика выделяются синим.
+      </p>
+    </article>
+  );
+  return (
+    <>
+      <div className="project-caption">
+        <span>Работа / ППР</span>
+        <span>
+          {statuses[task.status]} · {date(task.dueDate)}
+        </span>
+      </div>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      {notice && (
+        <output className="work-notice">
+          <Check />
+          {notice}
+        </output>
+      )}
+      {conflict && (
+        <div className="form-error">
+          Проект обновлён в другом окне. Ваши правки остались в форме.{' '}
+          <button
+            onClick={() => {
+              if (
+                !dirty ||
+                window.confirm(
+                  'Отбросить несохранённые правки и загрузить актуальную версию?',
+                )
+              )
+                accept(task);
+            }}
+          >
+            Загрузить актуальные данные
+          </button>
+        </div>
+      )}
+      <fieldset className="workspace-fieldset" disabled={busy || studioBusy || conflict}>
+        <WorkBriefForm
+          task={task}
+          project={project}
+          onChange={update}
+          dirty={dirty}
+          busy={busy || conflict}
+          onSave={() => void save()}
+          onApprove={() => void briefAction('approve')}
+          templates={library.templates}
+          local={library.enabled}
+          onLibrary={() => {
+            setPanel('files');
+            scrollTo('work-services');
+          }}
+        />
+      </fieldset>
+      <section
+        className="work-services"
+        id="work-services"
+        aria-label="Состояние проекта"
+      >
+        <div className="service-grid">
+          {[
+            {
+              id: 'status',
+              title: 'Статус разработки',
+              value:
+                stages.find((s) => s.id === project.stage)?.label ||
+                'Исходные данные',
+              detail: approved
+                ? 'ТЗ утверждено для разработки'
+                : `${briefIssues(project).length} обязательных уточнений`,
+              icon: HardHat,
+            },
+            {
+              id: 'files',
+              title: 'Реестр файлов',
+              value: `${project.documents.length} документов`,
+              detail: 'Исходные, шаблоны и версии',
+              icon: FolderOpen,
+            },
+            {
+              id: 'ntd',
+              title: 'Нормативный контроль',
+              value: 'Ожидает базу НТД',
+              detail: 'Автоматическая проверка не подключена',
+              icon: ShieldCheck,
+            },
+            {
+              id: 'checklist',
+              title: 'Чек-лист',
+              value: `${checksDone} из ${project.checklist.length}`,
+              detail: 'Ручная проверка готовности',
+              icon: ClipboardCheck,
+            },
+          ].map((c) => (
+            <button
+              key={c.id}
+              className={`service-card ${panel === c.id ? 'selected' : ''}`}
+              onClick={() => setPanel(panel === c.id ? '' : c.id)}
+              aria-expanded={panel === c.id}
+              aria-controls="service-detail"
+            >
+              <c.icon />
+              <span>{c.title}</span>
+              <strong>{c.value}</strong>
+              <small>{c.detail}</small>
+            </button>
+          ))}
+        </div>
+        {panel && (
+          <fieldset
+            id="service-detail"
+            className="service-detail workspace-fieldset"
+            disabled={busy || studioBusy || conflict}
+          >
+            {panel === 'status' && (
+              <>
+                <h2>Этап проекта</h2>
+                <div className="brief-grid">
+                  <label>
+                    Текущий этап
+                    <select
+                      value={project.stage}
+                      onChange={(e) =>
+                        update({
+                          ...project,
+                          stage: e.target.value as WorkProjectStage,
+                        })
+                      }
+                    >
+                      {stages.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <p className="hint">
+                    Вы задаёте этап вручную. Он не означает, что проверка
+                    специалистом уже выполнена. Статус задачи «
+                    {statuses[task.status]}» остаётся общим с дашбордом.
+                  </p>
+                </div>
+                {!!task.subtasks?.length && (
+                  <div className="work-subtasks">
+                    {task.subtasks.map((s) => (
+                      <p key={s.id}>
+                        {s.completed ? '✓' : '○'} {s.title}
+                        <small>
+                          {date(s.dueDate)} {s.dueTime}
+                        </small>
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+            {panel === 'files' && (
+              <>
+                <h2>Реестр документов</h2>
+                <p className="hint">
+                  Здесь сохраняются названия, версии и состояние документов. Это
+                  не загрузка содержимого файла.
+                </p>
+                <div className="register-rows">
+                  {project.documents.map((d) => (
+                    <div key={d.id}>
+                      <input
+                        aria-label={`Название документа ${d.name}`}
+                        maxLength={180}
+                        value={d.name}
+                        onChange={(e) =>
+                          update({
+                            ...project,
+                            documents: project.documents.map((v) =>
+                              v.id === d.id
+                                ? {
+                                    ...v,
+                                    name: e.target.value,
+                                    updatedAt: new Date().toISOString(),
+                                  }
+                                : v,
+                            ),
+                          })
+                        }
+                      />
+                      <select
+                        aria-label={`Категория ${d.name}`}
+                        value={d.category}
+                        onChange={(e) =>
+                          update({
+                            ...project,
+                            documents: project.documents.map((v) =>
+                              v.id === d.id
+                                ? {
+                                    ...v,
+                                    category: e.target
+                                      .value as WorkDocumentCategory,
+                                    updatedAt: new Date().toISOString(),
+                                  }
+                                : v,
+                            ),
+                          })
+                        }
+                      >
+                        {Object.entries(categories).map(([v, label]) => (
+                          <option key={v} value={v}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        aria-label={`Версия ${d.name}`}
+                        maxLength={40}
+                        value={d.version}
+                        onChange={(e) =>
+                          update({
+                            ...project,
+                            documents: project.documents.map((v) =>
+                              v.id === d.id
+                                ? {
+                                    ...v,
+                                    version: e.target.value,
+                                    updatedAt: new Date().toISOString(),
+                                  }
+                                : v,
+                            ),
+                          })
+                        }
+                      />
+                      <select
+                        aria-label={`Состояние ${d.name}`}
+                        value={d.status}
+                        onChange={(e) =>
+                          update({
+                            ...project,
+                            documents: project.documents.map((v) =>
+                              v.id === d.id
+                                ? {
+                                    ...v,
+                                    status: e.target
+                                      .value as WorkDocumentStatus,
+                                    updatedAt: new Date().toISOString(),
+                                  }
+                                : v,
+                            ),
+                          })
+                        }
+                      >
+                        {Object.entries(documentStatuses).map(([v, label]) => (
+                          <option key={v} value={v}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        className="icon-btn"
+                        aria-label={`Удалить запись ${d.name}`}
+                        onClick={() =>
+                          update({
+                            ...project,
+                            documents: project.documents.filter(
+                              (v) => v.id !== d.id,
+                            ),
+                          })
+                        }
+                      >
+                        <Trash2 />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="work-add-row">
+                  <input
+                    aria-label="Новый документ реестра"
+                    maxLength={180}
+                    value={documentName}
+                    onChange={(e) => setDocumentName(e.target.value)}
+                    placeholder="Название документа"
+                  />
+                  <select
+                    aria-label="Категория нового документа"
+                    value={category}
+                    onChange={(e) =>
+                      setCategory(e.target.value as WorkDocumentCategory)
+                    }
+                  >
+                    {Object.entries(categories).map(([v, label]) => (
+                      <option key={v} value={v}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className="quiet-btn"
+                    disabled={
+                      !documentName.trim() || project.documents.length >= 100
+                    }
+                    onClick={addDocument}
+                  >
+                    <Plus />
+                    Добавить запись
+                  </button>
+                </div>
+                <button
+                  className="quiet-btn"
+                  onClick={() => scrollTo('work-library')}
+                >
+                  <FolderOpen />
+                  Открыть локальные материалы
+                </button>
+              </>
+            )}
+            {panel === 'ntd' && (
+              <>
+                <h2>Специалист по нормативной документации</h2>
+                <p>
+                  Роль сохранена в команде. После подключения проверенной базы
+                  НТД здесь появятся замечания, ссылки на пункты и результат
+                  проверки раздела.
+                </p>
+                <button className="quiet-btn" disabled>
+                  <ShieldCheck />
+                  Проверка пока недоступна
+                </button>
+                <p className="hint">
+                  Сейчас документ не получает автоматическую отметку
+                  соответствия нормативам.
+                </p>
+              </>
+            )}
+            {panel === 'checklist' && (
+              <>
+                <h2>Проверки перед выпуском</h2>
+                <div className="check-rows">
+                  {project.checklist.map((c) => (
+                    <div key={c.id}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Проверено: ${c.title}`}
+                        checked={c.completed}
+                        onChange={(e) =>
+                          update({
+                            ...project,
+                            checklist: project.checklist.map((v) =>
+                              v.id === c.id
+                                ? { ...v, completed: e.target.checked }
+                                : v,
+                            ),
+                          })
+                        }
+                      />
+                      <input
+                        aria-label={`Пункт ${c.title}`}
+                        maxLength={180}
+                        value={c.title}
+                        onChange={(e) =>
+                          update({
+                            ...project,
+                            checklist: project.checklist.map((v) =>
+                              v.id === c.id
+                                ? { ...v, title: e.target.value }
+                                : v,
+                            ),
+                          })
+                        }
+                      />
+                      <button
+                        className="icon-btn"
+                        aria-label={`Удалить пункт ${c.title}`}
+                        onClick={() =>
+                          update({
+                            ...project,
+                            checklist: project.checklist.filter(
+                              (v) => v.id !== c.id,
+                            ),
+                          })
+                        }
+                      >
+                        <Trash2 />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="work-add-row">
+                  <input
+                    aria-label="Новый пункт проверки"
+                    maxLength={180}
+                    value={checkTitle}
+                    onChange={(e) => setCheckTitle(e.target.value)}
+                    placeholder="Что нужно проверить"
+                  />
+                  <button
+                    className="quiet-btn"
+                    disabled={
+                      !checkTitle.trim() || project.checklist.length >= 60
+                    }
+                    onClick={addCheck}
+                  >
+                    <Plus />
+                    Добавить пункт
+                  </button>
+                </div>
+              </>
+            )}
+            {panel !== 'ntd' && (
+              <button
+                className="primary-btn"
+                disabled={!dirty || busy}
+                onClick={() => void save()}
+              >
+                <Save />
+                Сохранить изменения
+              </button>
+            )}
+          </fieldset>
+        )}
+      </section>
+      <nav className="work-steps" aria-label="Шаги разработки">
+        {[
+          'Техническое задание',
+          'Исходные данные',
+          'Структура',
+          'Разделы и ТК',
+          'Проверки',
+          'Согласование',
+        ].map((name, i) => (
+          <button
+            key={name}
+            className={stepIndex === i ? 'current' : ''}
+            aria-current={stepIndex === i ? 'step' : undefined}
+            onClick={() => {
+              if (i === 0) scrollTo('work-brief');
+              else if (i === 1 || i >= 4) {
+                setPanel(i === 1 ? 'files' : i === 4 ? 'ntd' : 'status');
+                scrollTo('work-services');
+              } else scrollTo('working-document');
+            }}
+          >
+            <span>{i + 1}</span>
+            <b>{name}</b>
+          </button>
+        ))}
+      </nav>
+      {(project.developmentMode === 'with_tk' || assignments.length > 0) && (
+        <section className="tk-handoff">
+          <div>
+            <span className="eyebrow">СВЯЗАННЫЕ ЗАДАНИЯ</span>
+            <h2>Технологические карты</h2>
+            <p>
+              Из утверждённого перечня ТК. Исполнитель — отдельный агент, пока
+              не подключён.
+            </p>
+          </div>
+          <button
+            className="quiet-btn"
+            disabled={
+              busy ||
+              dirty ||
+              conflict ||
+              !approved ||
+              project.documentType !== 'ppr' ||
+              project.developmentMode !== 'with_tk' ||
+              !!latestAssignments.length
+            }
+            onClick={() => void briefAction('prepare_tk')}
+          >
+            <Plus />
+            Подготовить задания по ТК
+          </button>
+          {assignments.length > 0 && (
+            <details>
+              <summary>Подготовленные задания · {assignments.length}</summary>
+              {assignments.map((a) => (
+                <div className="tk-assignment" key={a.id}>
+                  <span>
+                    <strong>{a.title}</strong>
+                    <small>
+                      ТЗ v{a.briefVersion} ·{' '}
+                      {a.briefId === approval?.id && approved
+                        ? 'Ожидает исполнителя'
+                        : 'Предыдущая редакция — нужна сверка'}
+                    </small>
+                  </span>
+                  <button
+                    className="quiet-btn"
+                    onClick={() =>
+                      downloadJson(`TK-${a.id}.json`, {
+                        assignment: a,
+                        brief: task.briefApprovals?.find(
+                          (v) => v.id === a.briefId,
+                        )?.snapshot,
+                      })
+                    }
+                  >
+                    <Download />
+                    Задание
+                  </button>
+                </div>
+              ))}
+            </details>
+          )}
+        </section>
+      )}
+      <div className="workspace-editor">
+        <WorkProjectDialog
+          task={task}
+          project={project}
+          token={token}
+          dirty={dirty || busy || conflict}
+        />
+        <section className="working-document" id="working-document">
+          <header>
+            <div>
+              <span className="eyebrow">РАБОЧИЙ ДОКУМЕНТ</span>
+              <h2>Содержание и версии</h2>
+            </div>
+            <span className="badge">Черновик · инженерная проверка</span>
+          </header>
+          {project.documentType === 'ppr' && (
+            <label className="document-section-label">
+              Раздел
+              <select
+                value={activeSection.id}
+                onChange={(e) => setSection(e.target.value)}
+              >
+                {plan.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {project.documentType === 'ppr' ? (
+            <PprSectionStudio
+              task={task}
+              project={project}
+              token={token}
+              cloud={cloud}
+              sectionId={activeSection.id}
+              onTemplate={(path) =>
+                update({ ...project, baseTemplatePath: path })
+              }
+              onSection={setSection}
+              onSaveProject={() => void save()}
+              projectSaving={busy || conflict}
+              onBusyChange={setStudioBusy}
+              onSaved={accept}
+              embedded
+              emptyPreview={emptyDocument}
+            />
+          ) : (
+            emptyDocument
+          )}
+          <footer className="document-future">
+            <FileText />
+            <span>
+              Сейчас можно редактировать текст черновика и сохранять версии.
+              Загрузка исправленного DOCX, защита постоянных фрагментов и
+              проверки другими агентами — следующие этапы.
+            </span>
+          </footer>
+        </section>
+      </div>
+      <section className="work-agents" aria-label="Команда агентов">
+        <header>
+          <div>
+            <span className="eyebrow">КОМАНДА ПРОЕКТА</span>
+            <h2>Каждый агент — в своей роли</h2>
+          </div>
+          <p>
+            Показываем и будущих специалистов, чтобы был виден весь процесс.
+          </p>
+        </header>
+        <div>
+          {agents.map((a, i) => (
+            <article key={a.name}>
+              <a.icon />
+              <h3>{a.name}</h3>
+              <p>{a.description}</p>
+              <span className={`badge ${i === 0 ? 'amber' : ''}`}>
+                {a.state}
+              </span>
+              {i === 0 && (
+                <button
+                  className="quiet-btn"
+                  onClick={() => scrollTo('project-dialog')}
+                >
+                  <Bot />
+                  Открыть диалог
+                </button>
+              )}
+            </article>
+          ))}
+        </div>
+      </section>
+      <WorkLibrary token={token} />
+    </>
+  );
 }
 
 export default function WorkWorkspace() {
   const access = useOrbitSession();
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [catalog, setCatalog] = useState<Catalog>(defaultCatalog);
-  const [selectedId, setSelectedId] = useState('');
-  const [kind, setKind] = useState<DocumentKind>('ppr');
-  const [query, setQuery] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [projectDraft, setProjectDraft] = useState<WorkProject | null>(null);
-  const [projectSaving, setProjectSaving] = useState(false);
-  const [notice, setNotice] = useState('');
-  const [error, setError] = useState('');
-  const [documentName, setDocumentName] = useState('');
-  const [documentCategory, setDocumentCategory] = useState<WorkDocumentCategory>('source');
-  const [checklistTitle, setChecklistTitle] = useState('');
-  const [library, setLibrary] = useState<LocalLibrary>({ enabled: false, items: [] });
-  const [libraryChecked, setLibraryChecked] = useState(false);
-  const [libraryLoading, setLibraryLoading] = useState(false);
-  const [libraryQuery, setLibraryQuery] = useState('');
-  const [librarySearch, setLibrarySearch] = useState<LocalSearch>({ enabled: false, available: false, results: [] });
-  const [librarySearchChecked, setLibrarySearchChecked] = useState(false);
-  const [librarySearching, setLibrarySearching] = useState(false);
-  const [librarySearchApplied, setLibrarySearchApplied] = useState('');
-  const [pprAgentConsent, setPprAgentConsent] = useState(false);
-  const [pprAgentRunning, setPprAgentRunning] = useState(false);
-  const [pprAgentResult, setPprAgentResult] = useState<PprDeveloperResult | null>(null);
-  const [selectedSectionIndex, setSelectedSectionIndex] = useState(0);
-
+  const [tasks, setTasks] = useState<Task[]>([]),
+    [catalog, setCatalog] = useState<Catalog>(defaultCatalog);
+  const [selectedId, setSelectedId] = useState(''),
+    [query, setQuery] = useState(''),
+    [error, setError] = useState(''),
+    [loading, setLoading] = useState(true);
+  const dirty = useRef(false);
+  const loaded = useRef(false);
+  const allowedToLeave = () =>
+    !dirty.current ||
+    window.confirm(
+      'Есть несохранённые изменения или выполняется запрос. Продолжить переход?',
+    );
   const load = async () => {
-    if (access.loading || (access.mode === 'supabase' && !access.accessToken)) return;
-    setLoading(true);
+    if (access.loading || (access.mode === 'supabase' && !access.accessToken))
+      return;
+    setLoading(!loaded.current);
     setError('');
     try {
-      const [taskData, catalogData] = await Promise.all([
-        api<{ tasks: Task[] }>('/api/tasks', access.accessToken),
-        api<{ catalog: Catalog }>('/api/catalog', access.accessToken),
+      const [a, b] = await Promise.all([
+        workApi<{ tasks: Task[] }>('/api/tasks', access.accessToken),
+        workApi<{ catalog: Catalog }>('/api/catalog', access.accessToken),
       ]);
-      setTasks(taskData.tasks);
-      setCatalog(catalogData.catalog);
-      const pprDirection = catalogData.catalog.directions.find(item => item.sphereId === 'work' && item.name.trim().toLocaleLowerCase('ru') === 'ппр');
-      const workTasks = taskData.tasks.filter(task => task.sphere === 'work' && task.directionId === pprDirection?.id);
-      setSelectedId(current => workTasks.some(task => task.id === current) ? current : workTasks[0]?.id || '');
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Нет соединения с сервером.');
+      setTasks(a.tasks);
+      setCatalog(b.catalog);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : 'Не удалось загрузить проекты.',
+      );
     } finally {
+      loaded.current = true;
       setLoading(false);
     }
   };
-
-  useEffect(() => { queueMicrotask(() => void load()); }, [access.loading, access.mode, access.accessToken]);
-
-  const loadLibrary = async (path = '') => {
-    if (access.loading || (access.mode === 'supabase' && !access.accessToken)) return;
-    setLibraryLoading(true);
-    try {
-      const data = await api<LocalLibrary>(`/api/work-files?path=${encodeURIComponent(path)}`, access.accessToken);
-      setLibrary(data); setLibraryChecked(true);
-    } catch (cause) {
-      setLibraryChecked(true); setError(cause instanceof Error ? cause.message : 'Не удалось открыть локальную библиотеку.');
-    } finally { setLibraryLoading(false); }
-  };
-
-  const searchLibrary = async (searchQuery = '') => {
-    if (access.loading || (access.mode === 'supabase' && !access.accessToken)) return;
-    const cleaned = searchQuery.trim();
-    setLibrarySearching(true);
-    try {
-      const data = await api<LocalSearch>(`/api/work-search?q=${encodeURIComponent(cleaned)}`, access.accessToken);
-      setLibrarySearch(data); setLibrarySearchApplied(cleaned); setLibrarySearchChecked(true);
-    } catch (cause) {
-      setLibrarySearchChecked(true); setError(cause instanceof Error ? cause.message : 'Не удалось выполнить поиск по библиотеке.');
-    } finally { setLibrarySearching(false); }
-  };
-
   useEffect(() => {
-    if (!access.loading) queueMicrotask(() => { void loadLibrary(); void searchLibrary(); });
+    void load();
   }, [access.loading, access.mode, access.accessToken]);
-
-  const pprDirection = catalog.directions.find(item => item.sphereId === 'work' && item.name.trim().toLocaleLowerCase('ru') === 'ппр');
-  const workTasks = useMemo(() => tasks
-    .filter(task => task.sphere === 'work' && task.directionId === pprDirection?.id)
-    .filter(task => !query.trim() || task.title.toLocaleLowerCase('ru').includes(query.trim().toLocaleLowerCase('ru')))
-    .sort((a, b) => Number(b.focus) - Number(a.focus) || (a.dueDate || '9999-12-31').localeCompare(b.dueDate || '9999-12-31')),
-  [tasks, query, pprDirection?.id]);
-  const selected = tasks.find(task => task.id === selectedId && task.sphere === 'work' && task.directionId === pprDirection?.id) || workTasks[0];
-  const selectedDirection = selected ? catalog.directions.find(item => item.id === selected.directionId)?.name : '';
-  const progress = selected ? taskProgress(selected) : 0;
-  const pprSectionPlan = projectDraft ? buildPprSectionPlan(projectDraft) : [];
-  const pprReadiness = projectDraft ? evaluatePprReadiness(projectDraft) : null;
-  const sections = kind === 'ppr' && pprSectionPlan.length ? pprSectionPlan.map(section => section.title) : documentSections[kind];
-  const sectionIndex = Math.min(selectedSectionIndex, sections.length - 1);
-  const activePlan = kind === 'ppr' ? pprSectionPlan[sectionIndex] : null;
-  const activeDraft = selected?.pprDrafts?.filter(item => item.sectionId === activePlan?.id).at(-1);
-  const checklistDone = projectDraft?.checklist.filter(item => item.completed).length || 0;
-  const librarySegments = (library.path || '').split('/').filter(Boolean);
-
-  useEffect(() => { setSelectedSectionIndex(0); }, [selected?.id, kind]);
-
-  useEffect(() => {
-    if (selected) { const project = initialProject(selected); setProjectDraft(project); setKind(project.documentType); }
-    else setProjectDraft(null);
-    setPprAgentConsent(false); setPprAgentResult(null);
-  }, [selected?.id, selected?.revision]);
-
-  const saveProject = async () => {
-    if (!selected || !projectDraft || projectSaving) return;
-    setProjectSaving(true); setError(''); setNotice('');
-    try {
-      const data = await api<{ task: Task }>(`/api/tasks/${selected.id}`, access.accessToken, { method: 'PATCH', body: JSON.stringify({ op: 'edit_work_project', revision: selected.revision, project: projectDraft }) });
-      setTasks(current => current.map(task => task.id === data.task.id ? data.task : task));
-      setNotice('Карточка проекта сохранена.');
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось сохранить карточку проекта.'); }
-    finally { setProjectSaving(false); }
-  };
-
-  const runPprAgent = async () => {
-    if (!selected || !projectDraft || projectDraft.documentType !== 'ppr' || !pprAgentConsent || pprAgentRunning) return;
-    setPprAgentRunning(true); setError(''); setNotice(''); setPprAgentResult(null);
-    try {
-      const saved = await api<{ task: Task }>(`/api/tasks/${selected.id}`, access.accessToken, { method: 'PATCH', body: JSON.stringify({ op: 'edit_work_project', revision: selected.revision, project: projectDraft }) });
-      setTasks(current => current.map(task => task.id === saved.task.id ? saved.task : task));
-      const analysis = await api<{ result: PprDeveloperResult }>('/api/agents/ppr-developer', access.accessToken, { method: 'POST', body: JSON.stringify({ taskId: saved.task.id, confirmDataTransfer: true }) });
-      setPprAgentResult(analysis.result); setNotice('Разработчик ППР подготовил карту проекта. Проверьте результат.');
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось запустить разработчика ППР.'); }
-    finally { setPprAgentRunning(false); }
-  };
-
-  const addDocument = () => {
-    if (!projectDraft || !documentName.trim() || projectDraft.documents.length >= 100) return;
-    setProjectDraft({ ...projectDraft, documents: [...projectDraft.documents, { id: crypto.randomUUID(), name: documentName.trim(), category: documentCategory, version: '1.0', status: 'expected', updatedAt: new Date().toISOString() }] });
-    setDocumentName('');
-  };
-
-  const addChecklistItem = () => {
-    if (!projectDraft || !checklistTitle.trim() || projectDraft.checklist.length >= 60) return;
-    setProjectDraft({ ...projectDraft, checklist: [...projectDraft.checklist, { id: crypto.randomUUID(), title: checklistTitle.trim(), completed: false }] });
-    setChecklistTitle('');
-  };
-
-  const downloadLocalFile = async (item: Pick<LocalFileItem, 'name' | 'path'>) => {
-    setError('');
-    try {
-      const headers = new Headers({ 'X-Orbit-Client': 'dashboard' });
-      if (access.accessToken) headers.set('Authorization', `Bearer ${access.accessToken}`);
-      const response = await fetch(`/api/work-files/download?path=${encodeURIComponent(item.path)}`, { headers, cache: 'no-store' });
-      if (!response.ok) { const value = await response.json() as { error?: string }; throw new Error(value.error || 'Не удалось скачать файл.'); }
-      const url = URL.createObjectURL(await response.blob());
-      const link = document.createElement('a'); link.href = url; link.download = item.name; link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Не удалось скачать файл.'); }
-  };
-
-  if (access.loading) return <main className="work-auth"><LoaderCircle className="spin" />Загружаем рабочее пространство…</main>;
-  if (access.error || (access.mode === 'supabase' && !access.accessToken)) return <LoginScreen onSignIn={access.signIn} onSignUp={access.signUp} setupError={access.error} />;
-
-  return <main className="work-app">
-    <header className="work-topbar">
-      <div className="work-brand"><span><HardHat /></span><div><strong>ORBIT WORKS</strong><small>разработка ППР и ТК</small></div></div>
-      <nav className="work-mode" aria-label="Режим документа">
-        <button className={kind === 'ppr' ? 'active' : ''} onClick={() => { setKind('ppr'); setProjectDraft(current => current ? { ...current, documentType: 'ppr' } : current); }}>ППР</button>
-        <button className={kind === 'tk' ? 'active' : ''} onClick={() => { setKind('tk'); setProjectDraft(current => current ? { ...current, documentType: 'tk' } : current); }}>ТК</button>
-      </nav>
-      <div className="work-top-actions"><button className="work-icon-button" aria-label="Обновить проекты" onClick={() => void load()} disabled={loading}><RefreshCw className={loading ? 'spin' : ''} /></button><Link href="/" className="work-back"><ArrowLeft />К задачам</Link></div>
-    </header>
-
-    {error && <div className="work-feedback"><CircleAlert />{error}</div>}
-    {notice && <div className="work-feedback work-success"><Check />{notice}</div>}
-
-    <div className="work-shell">
-      <aside className="work-sidebar">
-        <div className="side-heading"><span>РАБОЧИЕ ПРОЕКТЫ</span><b>{workTasks.length}</b></div>
-        <label className="work-search"><Search /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Найти проект" /></label>
-        <div className="project-list">
-          {workTasks.map(task => <button key={task.id} className={task.id === selected?.id ? 'active' : ''} onClick={() => setSelectedId(task.id)}>
-            <span className="project-file"><FileText /></span><span><strong>{task.title}</strong><small>{catalog.directions.find(item => item.id === task.directionId)?.name || 'Без направления'}</small></span><ChevronRight />
-          </button>)}
-          {!loading && !workTasks.length && <div className="side-empty"><FolderOpen /><span>Назначьте рабочей задаче направление «ППР» — после этого она появится здесь.</span></div>}
+  const direction = catalog.directions.find(
+    (d) =>
+      d.sphereId === 'work' && d.name.trim().toLocaleLowerCase('ru') === 'ппр',
+  );
+  const workTasks = tasks
+    .filter((t) => t.sphere === 'work' && t.directionId === direction?.id)
+    .sort(
+      (a, b) =>
+        Number(b.focus) - Number(a.focus) ||
+        (a.dueDate || '9999').localeCompare(b.dueDate || '9999'),
+    );
+  const selected = workTasks.find((t) => t.id === selectedId) || workTasks[0];
+  const filtered = workTasks.filter(
+    (t) =>
+      t.title
+        .toLocaleLowerCase('ru')
+        .includes(query.trim().toLocaleLowerCase('ru')) ||
+      t.id === selected?.id,
+  );
+  if (access.loading)
+    return (
+      <main className="work-shell work-loading">
+        <LoaderCircle className="spin" />
+        Открываем рабочее пространство…
+      </main>
+    );
+  if (access.error || (access.mode === 'supabase' && !access.accessToken))
+    return (
+      <LoginScreen
+        onSignIn={access.signIn}
+        onSignUp={access.signUp}
+        setupError={access.error}
+      />
+    );
+  return (
+    <main className="work-shell">
+      <header className="works-topbar">
+        <div className="works-brand">
+          <HardHat />
+          <span>
+            <strong>ORBIT WORKS</strong>
+            <small>Мастерская ППР и ТК</small>
+          </span>
         </div>
-        <Link href="/" className="new-work-task"><Plus />Добавить рабочую задачу</Link>
-        <div className="side-heading agent-heading"><span>ПРОФЕССИОНАЛЬНЫЕ АГЕНТЫ</span></div>
-        <div className="work-agents">{professionalAgents.map(agent => { const Icon = agent.icon; const available = agent.name === 'Разработчик ППР'; return <button key={agent.name} disabled={!available} className={available ? 'available' : ''} onClick={() => document.getElementById('ppr-agent')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}><span><Icon /></span><span><strong>{agent.name}</strong><small>{agent.description}</small></span><em>{agent.state}</em></button>; })}</div>
-      </aside>
-
-      <section className="work-content">
-        {!selected ? <div className="work-empty"><FolderOpen /><h1>Проектов ППР пока нет</h1><p>В основном дашборде выберите для рабочей задачи направление «ППР».</p><Link href="/">Перейти к задачам</Link></div> : <>
-          <header className="project-header">
-            <div><span className="project-kicker">{kind === 'ppr' ? 'ПРОЕКТ ПРОИЗВОДСТВА РАБОТ' : 'ТЕХНОЛОГИЧЕСКАЯ КАРТА'}</span><h1>{selected.title}</h1><p>{selectedDirection || 'Без направления'} · {statuses[selected.status]} · {selected.dueDate ? `до ${dateLabel(selected.dueDate)}` : 'срок не задан'}</p></div>
-            <div className="project-progress"><span><b>{progress}%</b> прогресс задачи</span><i><b style={{ width: `${progress}%` }} /></i></div>
-          </header>
-
-          {projectDraft && <section className="project-card">
-            <header><div><span>КАРТОЧКА ПРОЕКТА</span><h2>Основные данные</h2></div><small>Сохраняется вместе с задачей Orbit</small></header>
-            <div className="project-fields">
-              <label><span>Вид документа</span><select value={projectDraft.documentType} onChange={event => { const documentType = event.target.value as DocumentKind; setProjectDraft({ ...projectDraft, documentType }); setKind(documentType); }}><option value="ppr">ППР</option><option value="tk">ТК</option></select></label>
-              <label className="project-field-wide"><span>Объект</span><input value={projectDraft.objectName} maxLength={240} onChange={event => setProjectDraft({ ...projectDraft, objectName: event.target.value })} placeholder="Название объекта" /></label>
-              <label className="project-field-wide"><span>Адрес объекта</span><input value={projectDraft.objectAddress} maxLength={300} onChange={event => setProjectDraft({ ...projectDraft, objectAddress: event.target.value })} placeholder="Адрес пока не указан" /></label>
-              <label><span>Заказчик</span><input value={projectDraft.customer} maxLength={200} onChange={event => setProjectDraft({ ...projectDraft, customer: event.target.value })} placeholder="Организация" /></label>
-              <label><span>Ответственный</span><input value={projectDraft.responsible} maxLength={160} onChange={event => setProjectDraft({ ...projectDraft, responsible: event.target.value })} placeholder="ФИО" /></label>
-              <label><span>Текущий этап</span><select value={projectDraft.stage} onChange={event => setProjectDraft({ ...projectDraft, stage: event.target.value as WorkProjectStage })}>{projectStages.map(stage => <option key={stage.id} value={stage.id}>{stage.label}</option>)}</select></label>
-              <button className="save-project" disabled={projectSaving} onClick={() => void saveProject()}>{projectSaving ? <LoaderCircle className="spin" /> : <Save />}{projectSaving ? 'Сохраняем…' : 'Сохранить карточку'}</button>
-            </div>
-          </section>}
-
-          {projectDraft && kind === 'ppr' && pprReadiness && <section className="ppr-brief-card">
-            <header><div><span><HardHat /></span><div><small>ПАСПОРТ РАЗРАБОТКИ</small><h2>Условия и состав ППР</h2></div></div><em className={pprReadiness.ready ? 'ready' : ''}>{pprReadiness.score}% исходных данных</em></header>
-            <div className="ppr-brief-layout">
-              <div className="ppr-brief-fields">
-                <label><span>Режим разработки</span><select value={projectDraft.developmentMode} onChange={event => setProjectDraft({ ...projectDraft, developmentMode: event.target.value as PprDevelopmentMode })}>{Object.entries(pprModeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-                <label><span>Основной вид работ</span><input value={projectDraft.workType} maxLength={300} onChange={event => setProjectDraft({ ...projectDraft, workType: event.target.value })} placeholder="Например: монолитные работы" /></label>
-                <label><span>Источник графиков</span><select value={projectDraft.scheduleSource} onChange={event => setProjectDraft({ ...projectDraft, scheduleSource: event.target.value as PprScheduleSource })}>{Object.entries(pprScheduleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-                <label className="ppr-template-field"><span>Базовый шаблон · выберите ниже в блоке «Черновик одного раздела»</span><input value={projectDraft.baseTemplatePath} readOnly placeholder="Шаблон пока не выбран" onClick={() => document.getElementById('ppr-section-studio')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} /></label>
-                <div className="ppr-condition-grid">
-                  <label><input type="checkbox" checked={projectDraft.hasWorkAtHeight} onChange={event => setProjectDraft({ ...projectDraft, hasWorkAtHeight: event.target.checked })} /><span>Работы на высоте</span></label>
-                  <label><input type="checkbox" checked={projectDraft.hasLiftingStructures} onChange={event => setProjectDraft({ ...projectDraft, hasLiftingStructures: event.target.checked, usesTowerCrane: event.target.checked ? projectDraft.usesTowerCrane : false })} /><span>Подъёмные сооружения</span></label>
-                  <label><input type="checkbox" checked={projectDraft.usesTowerCrane} onChange={event => setProjectDraft({ ...projectDraft, usesTowerCrane: event.target.checked, hasLiftingStructures: event.target.checked || projectDraft.hasLiftingStructures })} /><span>Башенный кран</span></label>
-                  <label><input type="checkbox" checked={projectDraft.hasMonolithicWork} onChange={event => setProjectDraft({ ...projectDraft, hasMonolithicWork: event.target.checked })} /><span>Монолитные работы</span></label>
-                </div>
-              </div>
-              <aside className="ppr-readiness">
-                <div className="readiness-score"><strong>{pprReadiness.score}%</strong><span>{pprReadiness.ready ? 'можно начинать' : 'нужно уточнить данные'}</span></div>
-                {pprReadiness.missing.length > 0 && <div><b><CircleAlert />Блокирует запуск</b>{pprReadiness.missing.map(item => <p key={item}>{item}</p>)}</div>}
-                {pprReadiness.warnings.length > 0 && <div><b><TriangleAlert />Проверьте до выпуска</b>{pprReadiness.warnings.slice(0, 4).map(item => <p key={item}>{item}</p>)}</div>}
-                {pprReadiness.ready && !pprReadiness.warnings.length && <div className="readiness-complete"><CircleCheckBig /><span><b>Паспорт заполнен</b><p>Можно передавать проект агенту.</p></span></div>}
-              </aside>
-            </div>
-          </section>}
-
-          <div className="workflow-strip">
-            {projectStages.map((step, index) => { const currentIndex = projectStages.findIndex(item => item.id === projectDraft?.stage); return <div className={index === currentIndex ? 'current' : index < currentIndex ? 'complete' : ''} key={step.id}><span>{index < currentIndex ? <Check /> : index + 1}</span><b>{step.label}</b></div>; })}
-          </div>
-
-          <div className="work-grid">
-            <section className="work-panel structure-panel">
-              <header><div><span>СТРУКТУРА</span><h2>{kind === 'ppr' ? 'Разделы ППР' : 'Разделы ТК'}</h2></div><ListChecks /></header>
-              <div className="section-list">{sections.map((section, index) => { const planItem = kind === 'ppr' ? pprSectionPlan[index] : null; return <button key={planItem?.id || section} className={index === sectionIndex ? 'active' : ''} title={planItem?.note} onClick={() => setSelectedSectionIndex(index)}><span>{index + 1}</span><b>{section.replace(/^\d+\.\s*/, '')}{planItem && <small>{planItem.treatment === 'manual' ? 'Вручную' : planItem.treatment === 'reference' ? 'Ссылка' : planItem.treatment === 'expand' ? 'Раскрыть' : planItem.treatment === 'conditional' ? 'По условию' : 'Постоянный'}</small>}</b><ChevronRight /></button>; })}</div>
-              <div className="task-stages"><span>ЭТАПЫ ИЗ ЗАДАЧИ</span>{selected.subtasks?.length ? selected.subtasks.map(item => <div key={item.id} className={item.completed ? 'done' : ''}><i>{item.completed && <Check />}</i><span><b>{item.title}</b><small>{dateLabel(item.dueDate)}{item.dueTime ? `, ${item.dueTime}` : ''}</small></span></div>) : <p>Этапы ещё не добавлены.</p>}</div>
-            </section>
-
-            <section className="work-panel editor-panel">
-              <header><div><span>РАБОЧИЙ ДОКУМЕНТ</span><h2>{sections[sectionIndex]}</h2></div><em>{activeDraft ? `Черновик · версия ${activeDraft.version}` : 'Черновик не создан'}</em></header>
-              <article className="document-sheet">
-                <div className="sheet-mark"><HardHat /></div>
-                <span>{kind === 'ppr' ? 'ППР' : 'ТК'}</span>
-                <h2>{selected.title}</h2>
-                <div className="sheet-rule" />
-                <h3>{sections[sectionIndex]}</h3>
-                {activeDraft ? <DraftText draft={activeDraft} /> : <><p>{selected.description}</p><div className="sheet-placeholder"><Sparkles /><span><b>Здесь появится текст документа</b><small>{activePlan?.note || 'Генерация ТК будет подключена отдельным этапом.'}</small></span></div></>}
-              </article>
-              <footer><span>{activeDraft ? 'Черновик требует инженерной проверки.' : 'Содержимое задачи синхронизировано с Orbit.'}</span><button disabled={kind !== 'ppr' || !draftableSectionIds.some(id => id === activePlan?.id)} onClick={() => document.getElementById('ppr-section-studio')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}><Sparkles />Работа с шаблоном</button></footer>
-            </section>
-
-            <aside className="work-side-column">
-              <section className="work-panel files-panel">
-                <header><div><span>ДОКУМЕНТЫ ПРОЕКТА</span><h2>Реестр файлов</h2></div><Upload /></header>
-                <div className="document-register">
-                  {projectDraft?.documents.length ? <div className="document-items">{projectDraft.documents.map(document => <article key={document.id}>
-                    <FileText />
-                    <div><b>{document.name}</b><span className="document-meta"><select aria-label={`Категория ${document.name}`} value={document.category} onChange={event => setProjectDraft({ ...projectDraft, documents: projectDraft.documents.map(item => item.id === document.id ? { ...item, category: event.target.value as WorkDocumentCategory, updatedAt: new Date().toISOString() } : item) })}>{Object.entries(documentCategoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><input aria-label={`Версия ${document.name}`} value={document.version} maxLength={40} onChange={event => setProjectDraft({ ...projectDraft, documents: projectDraft.documents.map(item => item.id === document.id ? { ...item, version: event.target.value, updatedAt: new Date().toISOString() } : item) })} placeholder="Версия" /></span></div>
-                    <select aria-label={`Статус ${document.name}`} value={document.status} onChange={event => setProjectDraft({ ...projectDraft, documents: projectDraft.documents.map(item => item.id === document.id ? { ...item, status: event.target.value as WorkDocumentStatus, updatedAt: new Date().toISOString() } : item) })}>{Object.entries(documentStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-                    <button aria-label={`Удалить ${document.name}`} onClick={() => setProjectDraft({ ...projectDraft, documents: projectDraft.documents.filter(item => item.id !== document.id) })}><Trash2 /></button>
-                  </article>)}</div> : <div className="register-empty"><FolderOpen /><b>Реестр пока пуст</b><p>Добавьте названия ожидаемых или уже полученных документов.</p></div>}
-                  <div className="register-add"><input value={documentName} maxLength={180} onChange={event => setDocumentName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addDocument(); } }} placeholder="Например: рабочая документация" /><select value={documentCategory} onChange={event => setDocumentCategory(event.target.value as WorkDocumentCategory)}>{Object.entries(documentCategoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><button onClick={addDocument} disabled={!documentName.trim()}><Plus />Добавить</button></div>
-                  <p className="storage-note"><Upload />Сейчас сохраняются данные о документе. Загрузка самого файла появится после выбора хранилища.</p>
-                </div>
-              </section>
-              <section className="work-panel checklist-panel">
-                <header><div><span>ГОТОВНОСТЬ ПРОЕКТА</span><h2>Чек-лист</h2></div><ClipboardCheck /></header>
-                <div className="project-checklist">{projectDraft?.checklist.map(item => <div key={item.id} className={item.completed ? 'done' : ''}><button aria-label={item.completed ? `Вернуть ${item.title}` : `Выполнить ${item.title}`} onClick={() => setProjectDraft({ ...projectDraft, checklist: projectDraft.checklist.map(check => check.id === item.id ? { ...check, completed: !check.completed } : check) })}>{item.completed && <Check />}</button><span>{item.title}</span><button aria-label={`Удалить ${item.title}`} onClick={() => setProjectDraft({ ...projectDraft, checklist: projectDraft.checklist.filter(check => check.id !== item.id) })}><Trash2 /></button></div>)}</div>
-                <div className="checklist-add"><input value={checklistTitle} maxLength={180} onChange={event => setChecklistTitle(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addChecklistItem(); } }} placeholder="Добавить пункт проверки" /><button onClick={addChecklistItem} disabled={!checklistTitle.trim()}><Plus /></button></div>
-              </section>
-              <section className="work-panel ntd-panel"><header><div><span>НОРМАТИВНЫЙ КОНТРОЛЬ</span><h2>Специалист по НТД</h2></div><LibraryBig /></header><div className="agent-status"><i /><span><b>Подготовлен интерфейс</b><small>Агент начнёт проверку после подключения вашей базы НТД.</small></span></div><button disabled><ShieldCheck />Проверить раздел</button></section>
-            </aside>
-          </div>
-
-          {projectDraft && kind === 'ppr' && pprReadiness && <section className="ppr-agent-panel" id="ppr-agent">
-            <header><div><span><Bot /></span><div><small>ПРОФЕССИОНАЛЬНЫЙ АГЕНТ</small><h2>Разработчик ППР</h2></div></div><em>{pprAgentResult ? 'Анализ готов' : 'Контракт MVP'}</em></header>
-            <div className="ppr-agent-intro">
-              <div><h3>Что он делает сейчас</h3><p>Проверяет один выбранный проект, формирует карту разделов и вопросы по недостающим исходным данным. НТД, AutoCAD и контроль качества остаются отдельными ролями.</p></div>
-              <dl><div><dt>Разделов в карте</dt><dd>{pprSectionPlan.length}</dd></div><div><dt>Готовность</dt><dd>{pprReadiness.score}%</dd></div><div><dt>Режим</dt><dd>{projectDraft.developmentMode === 'with_tk' ? 'с ТК' : projectDraft.developmentMode === 'without_tk' ? 'без ТК' : 'не выбран'}</dd></div></dl>
-            </div>
-            <div className="ppr-agent-control">
-              <label aria-label="Разрешить анализ выбранного проекта"><input type="checkbox" checked={pprAgentConsent} onChange={event => setPprAgentConsent(event.target.checked)} /><span><b>Разрешаю анализ выбранного проекта</b><small>В OpenAI будут переданы описание этой задачи, паспорт ППР и названия записей реестра. Остальные задачи, файлы, email и локальная библиотека не передаются.</small></span></label>
-              <button onClick={() => void runPprAgent()} disabled={!pprAgentConsent || pprAgentRunning}>{pprAgentRunning ? <LoaderCircle className="spin" /> : <Send />}{pprAgentRunning ? 'Анализируем…' : 'Составить карту ППР'}</button>
-            </div>
-            {pprAgentResult && <div className="ppr-agent-result">
-              <div className="agent-result-summary"><span className={pprAgentResult.readiness === 'ready' ? 'ready' : ''}>{pprAgentResult.readiness === 'ready' ? <CircleCheckBig /> : <CircleAlert />}</span><div><b>{pprAgentResult.readiness === 'ready' ? 'Можно начинать разработку' : 'Сначала нужны уточнения'}</b><p>{pprAgentResult.overview}</p></div></div>
-              <div className="agent-result-grid">
-                <section className="agent-plan-sections"><h3>Карта разделов ППР</h3><div>{pprAgentResult.sections.map((item, index) => <article key={`${item.title}-${index}`}><span>{index + 1}</span><div><b>{item.title}</b><p>{item.rationale}</p></div><em>{item.treatment === 'manual' ? 'Вручную' : item.treatment === 'reference' ? 'Ссылка' : item.treatment === 'expand' ? 'Раскрыть' : item.treatment === 'conditional' ? 'По условию' : 'Оставить'}</em></article>)}</div></section>
-                <section><h3>Недостающие данные и вопросы</h3>{[...pprAgentResult.missingInformation, ...pprAgentResult.questions].filter((item, index, all) => all.indexOf(item) === index).length ? [...pprAgentResult.missingInformation, ...pprAgentResult.questions].filter((item, index, all) => all.indexOf(item) === index).map((item, index) => <p key={`${item}-${index}`}><span>{index + 1}</span>{item}</p>) : <p className="agent-result-empty">Дополнительных вопросов нет.</p>}</section>
-                <section><h3>Передать другим ролям</h3>{pprAgentResult.handoffs.length ? pprAgentResult.handoffs.map((item, index) => <p key={`${item.target}-${index}`}><b>{pprHandoffLabels[item.target]}</b>{item.reason}</p>) : <p className="agent-result-empty">Передача другим ролям пока не требуется.</p>}</section>
-                <section><h3>Предупреждения</h3>{pprAgentResult.warnings.length ? pprAgentResult.warnings.map((item, index) => <p key={`${item}-${index}`}><TriangleAlert />{item}</p>) : <p className="agent-result-empty">Дополнительных предупреждений нет.</p>}</section>
-              </div>
-            </div>}
-          </section>}
-
-          {projectDraft && kind === 'ppr' && <PprSectionStudio key={selected.id} task={selected} project={projectDraft} token={access.accessToken} cloud={access.mode === 'supabase'} sectionId={activePlan?.id || 'general'} onSection={id => setSelectedSectionIndex(Math.max(0, pprSectionPlan.findIndex(item => item.id === id)))} onTemplate={path => setProjectDraft({ ...projectDraft, baseTemplatePath: path })} onSaveProject={() => void saveProject()} projectSaving={projectSaving} onSaved={task => setTasks(current => current.map(item => item.id === task.id ? task : item))} />}
-
-          <section className="local-library">
-            <header><div><span><HardDrive /></span><div><small>ЛОКАЛЬНЫЕ МАТЕРИАЛЫ</small><h2>Библиотека шаблонов ППР и ТК</h2></div></div>{library.enabled && <em>Только на этом компьютере</em>}</header>
-            {!libraryChecked || libraryLoading ? <div className="library-state"><LoaderCircle className="spin" />Читаем локальную папку…</div> : !library.enabled ? <div className="library-state"><HardDrive /><div><b>Локальная библиотека выключена</b><p>На сайте Vercel файлы с диска компьютера недоступны. Запустите локальную версию Orbit.</p></div></div> : <>
-              <nav className="library-path"><button onClick={() => void loadLibrary('')}><HardDrive />{library.rootName}</button>{librarySegments.map((segment, index) => <button key={`${segment}-${index}`} onClick={() => void loadLibrary(librarySegments.slice(0, index + 1).join('/'))}><ChevronRight />{segment}</button>)}</nav>
-              <div className="library-search-box">
-                <form onSubmit={event => { event.preventDefault(); void searchLibrary(libraryQuery); }}>
-                  <Search /><input value={libraryQuery} maxLength={120} onChange={event => setLibraryQuery(event.target.value)} placeholder="Найти технологию, раздел или требование в шаблонах" />
-                  {librarySearchApplied && <button type="button" className="clear-library-search" onClick={() => { setLibraryQuery(''); void searchLibrary(''); }} aria-label="Очистить поиск"><X /></button>}
-                  <button type="submit" disabled={librarySearching || libraryQuery.trim().length < 2}>{librarySearching ? <LoaderCircle className="spin" /> : <Search />}Найти</button>
-                </form>
-                {librarySearchChecked && librarySearch.available && librarySearch.summary && <p><b>{librarySearch.summary.indexed}</b> файлов распознано · {librarySearch.summary.needsConversion} старых DOC требуют преобразования{librarySearch.summary.errors ? ` · ${librarySearch.summary.errors} файла требуют повторной обработки` : ''}</p>}
-                {librarySearchChecked && !librarySearch.available && <p>Индекс пока не создан. Папки и файлы доступны для просмотра вручную.</p>}
-              </div>
-              {librarySearchApplied ? <div className="library-results">
-                <div className="library-result-heading"><span>РЕЗУЛЬТАТЫ ПОИСКА</span><b>{librarySearch.results.length}</b></div>
-                {librarySearch.results.length ? librarySearch.results.map(item => <article key={item.path}>
-                  <FileText /><span><b>{item.name}</b><p>{item.snippet}</p><small>{item.path}</small></span><button onClick={() => void downloadLocalFile(item)} aria-label={`Скачать ${item.name}`}><Download /></button>
-                </article>) : <div className="library-no-results"><Search /><b>В распознанных шаблонах ничего не найдено</b><p>Попробуйте более короткий запрос или откройте папки вручную.</p></div>}
-              </div> : <div className="library-items">{library.items.map(item => item.kind === 'directory' ? <button key={item.path} className="library-folder" onClick={() => void loadLibrary(item.path)}><FolderOpen /><span><b>{item.name}</b><small>Папка</small></span><ChevronRight /></button> : <article key={item.path}><FileText /><span><b>{item.name}</b><small>{item.extension.toLocaleUpperCase()} · {fileSize(item.size)} · {new Date(item.modifiedAt).toLocaleDateString('ru-RU')}</small></span><button onClick={() => void downloadLocalFile(item)} aria-label={`Скачать ${item.name}`}><Download /></button></article>)}</div>}
-            </>}
-          </section>
-
-          <section className="quality-bar"><div><FileCheck2 /><span><b>Контроль документа</b><small>Сохранённые черновики ещё не являются утверждёнными разделами.</small></span></div><dl><div><dt>Документы</dt><dd>{projectDraft?.documents.length || 0}</dd></div><div><dt>Чек-лист</dt><dd>{checklistDone} / {projectDraft?.checklist.length || 0}</dd></div><div><dt>Черновики разделов</dt><dd>{kind === 'ppr' ? new Set(selected.pprDrafts?.map(item => item.sectionId)).size : 0} / {sections.length}</dd></div></dl><button disabled><Scale />Передать на проверку</button></section>
-        </>}
-      </section>
-    </div>
-  </main>;
+        <Link
+          href="/"
+          onClick={(e) => {
+            if (!allowedToLeave()) e.preventDefault();
+          }}
+        >
+          <ArrowLeft />
+          Назад к задачам
+        </Link>
+      </header>
+      <div className="project-toolbar">
+        <div>
+          <span className="eyebrow">РАБОЧИЙ ПРОЕКТ</span>
+          <label>
+            <span className="sr-only">Выбрать проект</span>
+            <select
+              value={selected?.id || ''}
+              onChange={(e) => {
+                if (allowedToLeave()) setSelectedId(e.target.value);
+              }}
+            >
+              {filtered.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.title}
+                </option>
+              ))}
+              {!selected && (
+                <option value="">Нет проектов в направлении ППР</option>
+              )}
+            </select>
+          </label>
+        </div>
+        <input
+          aria-label="Поиск проекта"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Найти проект…"
+        />
+        <button
+          className="icon-btn"
+          aria-label="Обновить проекты"
+          disabled={loading}
+          onClick={() => {
+            if (allowedToLeave()) void load();
+          }}
+        >
+          <RefreshCw />
+        </button>
+      </div>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      {loading ? (
+        <p className="work-loading">
+          <LoaderCircle className="spin" />
+          Загружаем проекты…
+        </p>
+      ) : selected ? (
+        <ProjectWorkspace
+          key={selected.id}
+          task={selected}
+          token={access.accessToken}
+          cloud={access.mode === 'supabase'}
+          onSaved={(t) =>
+            setTasks((current) => current.map((v) => (v.id === t.id ? t : v)))
+          }
+          onDirty={(value) => {
+            dirty.current = value;
+          }}
+        />
+      ) : (
+        <section className="brief-card work-empty">
+          <FolderOpen />
+          <h1>Выберите первый проект</h1>
+          <p>
+            Сюда попадают только задачи из сферы «Работа», направления «ППР».
+          </p>
+          <Link href="/">Открыть дашборд</Link>
+        </section>
+      )}
+    </main>
+  );
 }
