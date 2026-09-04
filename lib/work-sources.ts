@@ -30,6 +30,10 @@ export function readSourceFolderUrl(value: unknown): string {
   }
   const text = value.trim();
   if (!text) return '';
+  if (/^[a-z]:[\\/]|^\\\\|^file:/i.test(text))
+    throw new Error(
+      'В поле «Ссылка на папку» указан локальный путь. Перенесите его в «Рабочая папка», а ссылку оставьте пустой.',
+    );
   let url: URL;
   try {
     url = new URL(text);
@@ -48,6 +52,14 @@ export function readSourceFolderUrl(value: unknown): string {
       'Нужна HTTPS-ссылка без логина и пароля. Не вставляйте API-ключи.',
     );
   return url.href;
+}
+export function sourceFolderIssue(value: unknown): string {
+  try {
+    readSourceFolderUrl(value);
+    return '';
+  } catch (e) {
+    return e instanceof Error ? e.message : 'Проверьте ссылку на папку.';
+  }
 }
 
 export function sourceFileIssue(file: { name: string; size: number }): string {

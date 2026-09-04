@@ -11,7 +11,7 @@
     "start": "next start",
     "lint": "oxlint",
     "format": "oxfmt",
-    "test:ppr": "node --experimental-strip-types --test tests/ppr-drafts.test.mjs tests/work-brief.test.mjs tests/ppr-docx.test.mjs tests/work-sources.test.mjs tests/ppr-xlsx.test.mjs tests/ntd-library.test.mjs",
+    "test:ppr": "node --experimental-strip-types --test tests/ppr-drafts.test.mjs tests/work-brief.test.mjs tests/ppr-docx.test.mjs tests/work-sources.test.mjs tests/ppr-xlsx.test.mjs tests/ntd-library.test.mjs tests/ppr-contract-tk.test.mjs",
     "test:ppr-api": "node tests/ppr-section-smoke.mjs"
   },
   "dependencies": {

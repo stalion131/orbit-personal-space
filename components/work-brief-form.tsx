@@ -2,6 +2,7 @@
 /* oxlint-disable react-compiler/effect-set-state */
 import { useState } from 'react';
 import { WorkRiskPicker } from '@/components/work-risk-picker';
+import { sourceFolderIssue } from '@/lib/work-sources';
 import {
   ChevronDown,
   Check,
@@ -183,6 +184,16 @@ export function WorkBriefForm({
     onChange({ ...p, brief: { ...b, ...patch } });
   const issues = briefIssues(p),
     warnings = briefWarnings(p);
+  const linkIssue = sourceFolderIssue(p.sourceFolderUrl);
+  const blockedReasons = [
+    ...issues,
+    ...(linkIssue ? [linkIssue] : []),
+    ...(dirty ? ['Сначала сохраните изменения ТЗ.'] : []),
+    ...(busy ? ['Дождитесь окончания текущего действия.'] : []),
+    ...(!confirmed
+      ? ['Отметьте галочку «Я проверил ТЗ и открытые вопросы».']
+      : []),
+  ];
   const docType = p.documentType === 'tk' ? 'tk' : p.developmentMode;
   return (
     <section className="brief-card" id="work-brief">
@@ -586,6 +597,7 @@ export function WorkBriefForm({
               Ссылка на папку с исходными данными
               <input
                 type="url"
+                aria-invalid={!!linkIssue}
                 value={p.sourceFolderUrl || ''}
                 maxLength={2000}
                 placeholder="https://… — ссылка на папку проекта"
@@ -595,11 +607,30 @@ export function WorkBriefForm({
                 aria-describedby="source-link-help"
               />
               <small id="source-link-help">
-                Сохраняется вместе с проектом. Ссылку можно открыть, но файлы из
-                облачной папки пока нужно скачать и выбрать для разбора. Не
-                указывайте пароли и API-ключи.
+                {linkIssue && <span className="form-error">{linkIssue} </span>}
+                Это необязательное поле. Для папки на компьютере оставьте его
+                пустым. Сохраняется вместе с проектом. Ссылку можно открыть, но
+                файлы из облачной папки пока нужно скачать и выбрать для
+                разбора. Не указывайте пароли и API-ключи.
               </small>
             </label>
+            {/^[a-z]:[\\/]/i.test(p.sourceFolderUrl || '') &&
+              (!b.workingFolder ||
+                b.workingFolder === p.sourceFolderUrl?.trim()) && (
+                <button
+                  type="button"
+                  className="quiet-btn"
+                  onClick={() =>
+                    onChange({
+                      ...p,
+                      sourceFolderUrl: '',
+                      brief: { ...b, workingFolder: p.sourceFolderUrl!.trim() },
+                    })
+                  }
+                >
+                  Перенести путь в «Рабочая папка»
+                </button>
+              )}
             <div className="schedule-chips">
               {[
                 'Производство работ',
@@ -640,9 +671,9 @@ export function WorkBriefForm({
                 ? 'Есть несохранённые изменения'
                 : 'Все изменения сохранены'}
               <br />
-              После сохранения загрузите файлы в блоке «Рабочий документ». SOL
-              предложит заполнение; выбранные поля применяются только после
-              проверки.
+              После сохранения загрузите файлы в блоке «Рабочий документ».
+              Автозаполнение дополнит ТЗ по источникам; проверьте результат
+              перед утверждением.
             </div>
             <button
               className="quiet-btn"
@@ -675,8 +706,15 @@ export function WorkBriefForm({
             <div className="brief-approval">
               <div>
                 <strong>Утверждение для разработки</strong>
-                {issues.length > 0 && (
-                  <p className="amber-text">{issues.join(' ')}</p>
+                {!!blockedReasons.length && (
+                  <div id="brief-approval-help" className="approval-help">
+                    <strong>Что нужно для утверждения</strong>
+                    <ul>
+                      {blockedReasons.map((reason) => (
+                        <li key={reason}>{reason}</li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
                 <details>
                   <summary>Открытые вопросы · {warnings.length}</summary>
@@ -688,7 +726,7 @@ export function WorkBriefForm({
                   <input
                     type="checkbox"
                     checked={confirmed}
-                    disabled={busy || dirty || !!issues.length}
+                    disabled={busy || dirty || !!issues.length || !!linkIssue}
                     onChange={(e) => setConfirmed(e.target.checked)}
                   />
                   Я проверил ТЗ и открытые вопросы. Утверждаю эту редакцию для
@@ -701,7 +739,10 @@ export function WorkBriefForm({
                   setView('auto');
                   onApprove();
                 }}
-                disabled={!confirmed || dirty || busy || !!issues.length}
+                aria-describedby="brief-approval-help"
+                disabled={
+                  !confirmed || dirty || busy || !!issues.length || !!linkIssue
+                }
               >
                 <Check />
                 Утвердить ТЗ

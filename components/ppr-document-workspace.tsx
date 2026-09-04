@@ -14,7 +14,7 @@ import {
   fieldValue,
   hasSignatoryPosition,
   PPR_MODEL,
-  type BriefField,
+  proposalKey,
   type TextBlock,
 } from '@/lib/ppr-workspace';
 import { readWorkBrief, isBriefApproved } from '@/lib/work-brief';
@@ -85,7 +85,7 @@ export function PprDocumentWorkspace({
     [original, setOriginal] = useState<File | null>(null);
   const [consent, setConsent] = useState(false),
     [assemblyConsent, setAssemblyConsent] = useState(false);
-  const [fields, setFields] = useState<BriefField[]>([]),
+  const [fields, setFields] = useState<string[]>([]),
     [blocks, setBlocks] = useState<string[]>([]);
   const [sectionId, setSectionId] = useState('general'),
     [draftId, setDraftId] = useState(''),
@@ -143,9 +143,10 @@ export function PprDocumentWorkspace({
             (p.field.endsWith('.position') &&
               !hasSignatoryPosition(fieldValue(project, brief, p.field))),
         )
-        .map((p) => p.field),
+        .filter((p) => !analysis?.applied.includes(proposalKey(p)))
+        .map(proposalKey),
     );
-  }, [analysis?.id]);
+  }, [analysis?.id, analysis?.applied.join('|')]);
   useEffect(() => {
     setIndices([]);
     setRule('');
@@ -405,6 +406,38 @@ export function PprDocumentWorkspace({
                 </details>
               </div>
             ))}
+            <button
+              className="quiet-btn"
+              disabled={
+                !previews.length ||
+                previews.length !== sources.length ||
+                !previews.some((p) => purposes[p.file.hash] === 'ppr_contract')
+              }
+              onClick={() =>
+                void run(async () => {
+                  const files = [];
+                  for (const [index, source] of sources.entries())
+                    if (purposes[previews[index].file.hash] === 'ppr_contract')
+                      files.push({
+                        ...(await wireFile(source)),
+                        purpose: 'ppr_contract',
+                      });
+                  accept(
+                    await post({ op: 'extract_tk', autoFill: true, files }),
+                  );
+                  setNotice(
+                    'ТК добавлены в ТЗ и сохранены. Проверьте перечень.',
+                  );
+                })
+              }
+            >
+              Заполнить перечень ТК из договора
+            </button>
+            <p className="hint">
+              Сначала прочитайте файлы и выберите назначение «Договор на
+              разработку ППР». Находит явно пронумерованные ТК; сложные таблицы
+              требуют разбора SOL.
+            </p>
             {consentControl}
             <button
               className="primary-btn"
@@ -428,38 +461,56 @@ export function PprDocumentWorkspace({
                   accept(
                     await post({
                       op: 'analyze',
+                      autoFill: true,
                       files,
                       confirmDataTransfer: true,
                     }),
                   );
-                  setNotice('Предложения готовы. Поля ТЗ ещё не изменены.');
+                  setNotice(
+                    'ТЗ автоматически дополнено и сохранено. Проверьте заполнение и расхождения.',
+                  );
                 })
               }
             >
               <Sparkles />
-              Предложить заполнение ТЗ
+              Автозаполнить ТЗ по исходным данным
             </button>
             {analysis && (
               <section className="ppr-proposals">
                 <h4>Проверка предложений</h4>
                 <p>
-                  Отмечены только пустые поля. Заполненное поле можно заменить,
-                  выбрав его вручную. После применения изменённое ТЗ нужно
-                  утвердить заново.
+                  {analysis.method === 'contract_tk'
+                    ? 'Перечень извлечён из текста договора без вызова ИИ.'
+                    : 'Предложения SOL и сведения из договора.'}{' '}
+                  ТК добавляются к текущему перечню без удаления ваших записей.
+                </p>
+                <p>
+                  Подтверждённые свободные поля заполнены автоматически.
+                  Заполненное поле можно заменить, выбрав его вручную. После
+                  применения изменённое ТЗ нужно утвердить заново.
                 </p>
                 {analysis.proposals.map((p) => (
                   <label
                     aria-label={fieldLabels[p.field]}
-                    key={p.field}
+                    key={proposalKey(p)}
                     className="ppr-proposal"
                   >
                     <input
                       type="checkbox"
-                      checked={fields.includes(p.field)}
-                      onChange={() => setFields(toggle(fields, p.field))}
+                      disabled={analysis.applied.includes(proposalKey(p))}
+                      checked={
+                        analysis.applied.includes(proposalKey(p)) ||
+                        fields.includes(proposalKey(p))
+                      }
+                      onChange={() => setFields(toggle(fields, proposalKey(p)))}
                     />
                     <span>
-                      <strong>{fieldLabels[p.field]}</strong>
+                      <strong>
+                        {fieldLabels[p.field]}{' '}
+                        {analysis.applied.includes(proposalKey(p))
+                          ? '· сохранено в ТЗ'
+                          : '· требует проверки'}
+                      </strong>
                       <span className="muted">
                         Сейчас:{' '}
                         {fieldValue(project, brief, p.field) || 'Не заполнено'}
@@ -504,9 +555,7 @@ export function PprDocumentWorkspace({
                 <button
                   className="primary-btn"
                   disabled={
-                    !fields.length ||
-                    analysis.revision !== task.revision ||
-                    !!analysis.applied.length
+                    !fields.length || analysis.revision !== task.revision
                   }
                   onClick={() =>
                     void run(async () => {
@@ -525,8 +574,7 @@ export function PprDocumentWorkspace({
                 >
                   Применить выбранные поля
                 </button>
-                {(analysis.revision !== task.revision ||
-                  !!analysis.applied.length) && (
+                {analysis.revision !== task.revision && (
                   <small>
                     Разбор уже применён или ТЗ изменилось. Для нового заполнения
                     повторите анализ.

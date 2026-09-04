@@ -13,6 +13,9 @@ import {
 } from '@/lib/ppr-docx';
 import {
   applyProposals,
+  autoFillProposals,
+  contractTkProposals,
+  proposalKey,
   PPR_MODEL,
   readPprWorkspace,
   verifiedProposals,
@@ -181,8 +184,8 @@ export async function POST(
         );
       return json(payload);
     }
-    if (data.op === 'analyze') {
-      modelConsent();
+    if (data.op === 'analyze' || data.op === 'extract_tk') {
+      if (data.op === 'analyze') modelConsent();
       if (
         !Array.isArray(data.files) ||
         !data.files.length ||
@@ -215,40 +218,47 @@ export async function POST(
         throw new TaskError(
           'Уберите повторные файлы или сократите пакет до 300 000 знаков.',
         );
-      const output = await extractPprBrief(
-        task.workProject,
-        files,
-        workspace,
-        AbortSignal.any([request.signal, AbortSignal.timeout(55000)]),
-      );
-      const validated = verifiedProposals(output.proposals, files).filter(
-        (p) => {
-          try {
-            const next = applyProposals(
+      const output =
+        data.op === 'extract_tk'
+          ? { proposals: [], questions: [], warnings: [] }
+          : await extractPprBrief(
               task.workProject,
-              readWorkBrief(task.workProject.brief, task.workProject),
-              [p],
+              files,
+              workspace,
+              AbortSignal.any([request.signal, AbortSignal.timeout(55000)]),
             );
-            readWorkBrief(next.brief, next);
-            return (
-              next.objectName.length <= 240 &&
-              next.objectAddress.length <= 300 &&
-              next.workType.length <= 300
-            );
-          } catch {
-            return false;
-          }
-        },
-      );
+      const candidates = [...contractTkProposals(files), ...output.proposals];
+      const validated = verifiedProposals(candidates, files).filter((p) => {
+        try {
+          const next = applyProposals(
+            task.workProject,
+            readWorkBrief(task.workProject.brief, task.workProject),
+            [p],
+          );
+          readWorkBrief(next.brief, next);
+          return (
+            next.objectName.length <= 240 &&
+            next.objectAddress.length <= 300 &&
+            next.workType.length <= 300
+          );
+        } catch {
+          return false;
+        }
+      });
       const proposals = proposalsWithKnownPositions(
         validated,
         readWorkBrief(task.workProject.brief, task.workProject),
       );
+      const autoFill =
+        data.autoFill === true
+          ? autoFillProposals(task.workProject, proposals)
+          : null;
       workspace.analyses.push({
         id: crypto.randomUUID(),
         at: now,
         revision: task.revision + 1,
         model: PPR_MODEL,
+        ...(data.op === 'extract_tk' ? { method: 'contract_tk' as const } : {}),
         files: files.map(({ hash, name, size, characters, purpose }) => ({
           hash,
           name,
@@ -259,7 +269,8 @@ export async function POST(
         proposals,
         questions: output.questions.map((s) => s.slice(0, 500)).slice(0, 15),
         warnings: [
-          ...(proposals.length !== output.proposals.length
+          ...(autoFill?.warnings || []),
+          ...(proposals.length !== candidates.length
             ? [
                 'Исключены предложения без проверяемой цитаты, с неверным значением, ФИО без известной должности или подменой строительных сторон из договора на разработку ППР.',
               ]
@@ -269,19 +280,23 @@ export async function POST(
           ),
           ...output.warnings.map((s) => s.slice(0, 500)),
         ].slice(0, 15),
-        applied: [],
+        applied: autoFill?.applied || [],
       });
-      return commit('SOL подготовила предложения для ТЗ', {
-        workProject: registerFiles(files, 'source'),
-      });
+      return commit(
+        data.op === 'extract_tk'
+          ? 'Из договора извлечён перечень ТК для проверки'
+          : 'SOL подготовила предложения для ТЗ',
+        {
+          workProject: {
+            ...(autoFill?.project || task.workProject),
+            documents: registerFiles(files, 'source').documents,
+          },
+        },
+      );
     }
     if (data.op === 'apply') {
       const analysis = workspace.analyses.find((a) => a.id === data.analysisId);
-      if (
-        !analysis ||
-        analysis.revision !== task.revision ||
-        analysis.applied.length
-      )
+      if (!analysis || analysis.revision !== task.revision)
         throw new TaskError(
           'Разбор устарел или уже применён. Выполните новый разбор по актуальному ТЗ.',
           409,
@@ -289,12 +304,16 @@ export async function POST(
       if (
         !Array.isArray(data.fields) ||
         !data.fields.length ||
-        data.fields.length > 28 ||
+        data.fields.length > 60 ||
         new Set(data.fields).size !== data.fields.length
       )
         throw new TaskError('Выберите поля для заполнения.');
+      if (data.fields.some((f) => analysis.applied.includes(f)))
+        throw new TaskError('Выбранные значения уже сохранены в ТЗ.', 409);
       const proposals = data.fields.map((f) =>
-        analysis.proposals.find((p) => p.field === f),
+        analysis.proposals.find(
+          (p) => proposalKey(p) === f && !analysis.applied.includes(f),
+        ),
       );
       if (proposals.some((p) => !p))
         throw new TaskError('Поле отсутствует в проверенном разборе.');
@@ -313,7 +332,8 @@ export async function POST(
             'ФИО нельзя применить без должности. Выберите также проверенное предложение должности или оставьте оба поля пустыми.',
           );
       }
-      analysis.applied = data.fields as BriefField[];
+      analysis.applied.push(...(data.fields as BriefField[]));
+      analysis.revision = task.revision + 1;
       return commit('Применены выбранные предложения для ТЗ', {
         workProject: project,
       });

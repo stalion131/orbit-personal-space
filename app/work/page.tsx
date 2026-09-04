@@ -419,7 +419,7 @@ function ProjectWorkspace({
           project={project}
           onChange={update}
           dirty={dirty}
-          busy={busy || conflict}
+          busy={busy || studioBusy || conflict}
           onSave={() => void save()}
           onApprove={() => void briefAction('approve')}
           templates={library.templates}

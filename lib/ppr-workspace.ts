@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { WorkProject } from './tasks';
-import type { WorkBrief } from './work-brief';
+import { readWorkBrief, type WorkBrief } from './work-brief.ts';
 import type { SourcePurpose } from './work-sources';
 
 export const PPR_MODEL = 'gpt-5.6-sol';
@@ -8,8 +8,12 @@ export const fieldLabels = {
   objectName: 'Объект',
   objectAddress: 'Адрес объекта',
   workType: 'Основной вид работ',
+  developmentMode: 'ППР с ТК / без ТК',
+  scheduleSource: 'Источник графиков',
+  'brief.documentLabel': 'Уточнение вида документа',
   'brief.title': 'Наименование ППР',
   'brief.code': 'Шифр',
+  'brief.tkList': 'Добавить ТК в перечень',
   'brief.contractor.organization': 'Подрядчик',
   'brief.contractor.position': 'Должность утверждающего',
   'brief.contractor.fullName': 'ФИО утверждающего',
@@ -48,6 +52,57 @@ export const extractionSchema = z.object({
   warnings: z.array(z.string()),
 });
 export type FieldProposal = z.infer<typeof proposalSchema>;
+export const proposalKey = (p: FieldProposal) =>
+  p.field === 'brief.tkList' ? `${p.field}:${p.value}` : p.field;
+const normalizedTk = (value: string) =>
+  value
+    .trim()
+    .replace(/[;.]$/, '')
+    .replace(/\s+/g, ' ')
+    .replace(/K/g, 'К')
+    .toLocaleLowerCase('ru');
+export function contractTkProposals(
+  files: { hash: string; purpose?: SourcePurpose; blocks: TextBlock[] }[],
+): FieldProposal[] {
+  const cards = files
+    .filter((f) => f.purpose === 'ppr_contract')
+    .flatMap((f) =>
+      f.blocks.flatMap((b) =>
+        b.text
+          .split(/\r?\n/)
+          .filter((line) => /^\s*[ТT][КK]\s*№\s*\d+\s*[-–—.:]/u.test(line))
+          .map((line) => ({
+            field: 'brief.tkList' as const,
+            value: line.trim().replace(/[;.]$/, ''),
+            fileHash: f.hash,
+            blockId: b.id,
+            quote: line,
+            reason:
+              'Явно перечисленная ТК из договора на разработку ППР. Добавляется после вашей проверки; текущий перечень сохраняется.',
+          })),
+      ),
+    );
+  const modes: FieldProposal[] = files
+    .filter((f) => f.purpose === 'ppr_contract')
+    .flatMap((f) =>
+      f.blocks
+        .filter(
+          (b) =>
+            /В состав ППР входят[^\n]*технологические карты/i.test(b.text) &&
+            b.text.length <= 800,
+        )
+        .map((b) => ({
+          field: 'developmentMode',
+          value: 'with_tk',
+          fileHash: f.hash,
+          blockId: b.id,
+          quote: b.text,
+          reason:
+            'В договоре прямо указано, что технологические карты входят в состав ППР.',
+        })),
+    );
+  return [...cards, ...modes];
+}
 export type TextBlock = { id: string; text: string };
 export type FileInfo = {
   hash: string;
@@ -57,6 +112,7 @@ export type FileInfo = {
   purpose?: SourcePurpose;
 };
 export type BriefAnalysis = {
+  method?: 'contract_tk';
   id: string;
   at: string;
   revision: number;
@@ -112,6 +168,7 @@ export function readPprWorkspace(value: unknown): PprWorkspace {
             at: z.iso.datetime(),
             revision: z.number().int().positive(),
             model: z.literal(PPR_MODEL),
+            method: z.literal('contract_tk').optional(),
             files: z
               .array(
                 z.object({
@@ -141,10 +198,10 @@ export function readPprWorkspace(value: unknown): PprWorkspace {
                   blockId: text.max(80),
                 }),
               )
-              .max(28),
+              .max(60),
             questions: z.array(text.max(500)).max(15),
             warnings: z.array(text.max(500)).max(15),
-            applied: z.array(z.string()).max(28),
+            applied: z.array(z.string()).max(60),
           }),
         )
         .max(10),
@@ -183,6 +240,7 @@ export function fieldValue(
   brief: WorkBrief,
   field: BriefField,
 ): string {
+  if (field === 'brief.tkList') return brief.tkList.join('\n');
   let current: unknown = field.startsWith('brief.') ? brief : project;
   for (const key of field.replace(/^brief\./, '').split('.'))
     current = (current as Record<string, unknown>)?.[key];
@@ -200,6 +258,30 @@ export function applyProposals(
 ): WorkProject {
   const result = structuredClone({ ...project, brief });
   for (const proposal of proposals) {
+    if (
+      proposal.field === 'developmentMode' &&
+      !['with_tk', 'without_tk'].includes(proposal.value)
+    )
+      throw new Error('Неверный вид ППР.');
+    if (
+      proposal.field === 'scheduleSource' &&
+      !['contractor', 'draft'].includes(proposal.value)
+    )
+      throw new Error('Неверный источник графиков.');
+    if (proposal.field === 'brief.tkList') {
+      const title = proposal.value.trim();
+      if (!title || title.length > 200 || /[\r\n]/.test(title))
+        throw new Error('Одна ТК должна содержать название до 200 символов.');
+      if (
+        !result.brief.tkList.some(
+          (t) => normalizedTk(t) === normalizedTk(title),
+        )
+      )
+        result.brief.tkList.push(title);
+      if (result.brief.tkList.length > 30)
+        throw new Error('В перечне допускается до 30 ТК.');
+      continue;
+    }
     if (!(proposal.field in fieldLabels))
       throw new Error('Поле ТЗ недоступно для заполнения.');
     const parts = proposal.field.split('.');
@@ -230,6 +312,42 @@ export function applyProposals(
   return result;
 }
 
+export function autoFillProposals(
+  project: WorkProject,
+  proposals: FieldProposal[],
+) {
+  const brief = readWorkBrief(project.brief, project);
+  const eligible = proposalsWithKnownPositions(
+    proposals.filter((p) => {
+      const current = fieldValue(project, brief, p.field);
+      return (
+        p.field === 'brief.tkList' ||
+        !current ||
+        current === 'unknown' ||
+        current === 'undecided' ||
+        (p.field.endsWith('.position') && !hasSignatoryPosition(current))
+      );
+    }),
+    brief,
+  );
+  let result: WorkProject = structuredClone({ ...project, brief });
+  const applied: string[] = [],
+    warnings: string[] = [];
+  for (const p of eligible) {
+    try {
+      const next = applyProposals(result, result.brief!, [p]);
+      next.brief = readWorkBrief(next.brief, next);
+      result = next;
+      applied.push(proposalKey(p));
+    } catch {
+      warnings.push(
+        `Не удалось автоматически заполнить «${fieldLabels[p.field]}». Проверьте значение или лимит списка.`,
+      );
+    }
+  }
+  return { project: result, applied, warnings };
+}
+
 export function verifiedProposals(
   proposals: FieldProposal[],
   files: { hash: string; blocks: TextBlock[]; purpose?: SourcePurpose }[],
@@ -248,19 +366,24 @@ export function verifiedProposals(
         .find((f) => f.hash === p.fileHash)
         ?.blocks.find((b) => b.id === p.blockId);
       if (
-        seen.has(p.field) ||
+        seen.has(
+          p.field === 'brief.tkList' ? `tk:${normalizedTk(p.value)}` : p.field,
+        ) ||
         !source ||
         !p.quote.trim() ||
         p.quote.length > 800 ||
         !source.text.includes(p.quote) ||
+        (p.field === 'brief.tkList' && !p.quote.includes(p.value)) ||
         p.value.length > 3000 ||
         p.reason.length > 500
       )
         return false;
-      seen.add(p.field);
+      seen.add(
+        p.field === 'brief.tkList' ? `tk:${normalizedTk(p.value)}` : p.field,
+      );
       return true;
     })
-    .slice(0, 28);
+    .slice(0, 60);
 }
 
 export function hasSignatoryPosition(position: string): boolean {

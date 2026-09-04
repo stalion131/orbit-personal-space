@@ -1635,3 +1635,22 @@
     gap: 6px;
   }
 }
+.approval-help {
+  background: #211d25;
+  border: 1px solid #775039;
+  border-radius: 12px;
+  padding: 14px 18px;
+  margin: 12px 0;
+  line-height: 1.65;
+}
+.approval-help ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+#work-source-location input[aria-invalid='true'] {
+  border-color: #ffad78;
+}
+#source-link-help .form-error {
+  display: block;
+  color: #ffc89f;
+}

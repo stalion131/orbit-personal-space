@@ -38,6 +38,45 @@ export async function workspaceSmoke({ api, task, setOutput, modelRequests }) {
   );
   assert.ok(!JSON.stringify(modelRequests.at(-1)).includes(task.title));
   setOutput(null);
+  const beforeTkCalls = modelRequests.length;
+  const contract = wire(
+    'contract.txt',
+    Buffer.from('ТК №1 - Монтаж;\nТK №2 - Демонтаж.'),
+  );
+  ({ task } = await call('extract_tk', {
+    files: [{ ...contract, purpose: 'ppr_contract' }],
+  }));
+  const tkAnalysis = task.pprWorkspace.analyses.at(-1);
+  assert.equal(tkAnalysis.method, 'contract_tk');
+  assert.equal(tkAnalysis.proposals.length, 2);
+  assert.equal(
+    modelRequests.length,
+    beforeTkCalls,
+    'No model call for explicit TK extraction',
+  );
+  const beforeTk = task.workProject.brief.tkList;
+  ({ task } = await call('apply', {
+    analysisId: tkAnalysis.id,
+    fields: tkAnalysis.proposals.map((p) => `${p.field}:${p.value}`),
+  }));
+  assert.deepEqual(task.workProject.brief.tkList, [
+    ...new Set([...beforeTk, 'ТК №1 - Монтаж', 'ТK №2 - Демонтаж']),
+  ]);
+  const autoContract = wire(
+    'auto-contract.txt',
+    Buffer.from('ТК №3 - Автоматическое добавление;'),
+  );
+  const existingMethods = task.workProject.brief.methods;
+  ({ task } = await call('extract_tk', {
+    files: [{ ...autoContract, purpose: 'ppr_contract' }],
+    autoFill: true,
+  }));
+  assert.ok(
+    task.workProject.brief.tkList.includes('ТК №3 - Автоматическое добавление'),
+  );
+  assert.equal(task.workProject.brief.methods, existingMethods);
+  assert.equal(task.pprWorkspace.analyses.at(-1).applied.length, 1);
+  assert.equal(modelRequests.length, beforeTkCalls);
   const pdf = await call(
     'inspect',
     { file: wire('source.pdf', pdfFixture()) },
