@@ -35,6 +35,7 @@ export async function workspaceSmoke({ api, task, setOutput, modelRequests }) {
   assert.equal(modelRequests.at(-1).reasoning.effort,'medium');
   assert.equal(modelRequests.at(-1).store,false);
   assert.ok(!JSON.stringify(modelRequests.at(-1)).includes('PRIVATE_FOLDER_DO_NOT_SEND'));
+  assert.ok(!JSON.stringify(modelRequests.at(-1)).includes('PRIVATE_LINK_DO_NOT_SEND'));
   await call('apply',{analysisId:analysis.id,fields:['workType']},400);
   ({task}=await call('apply',{analysisId:analysis.id,fields:['objectAddress']}));
   assert.equal(task.workProject.objectAddress,'Учебная улица, 1');

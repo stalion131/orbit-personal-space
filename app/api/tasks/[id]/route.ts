@@ -4,6 +4,7 @@ import { getCloudTask, saveCloudTask, deleteCloudTask } from '@/lib/supabase-rep
 import { getCloudCatalog, getLocalCatalog } from '@/lib/catalog-repository';
 import { authorize, body, json, failure } from '@/lib/http';
 import { readWorkBrief } from '@/lib/work-brief';
+import { readSourceFolderUrl } from '@/lib/work-sources';
 export async function PATCH(request: Request, context: {params: Promise<{id: string}>}) {
   try {
     const access = await authorize(request); const {id} = await context.params; const data = await body(request, 131072);
@@ -23,6 +24,7 @@ export async function PATCH(request: Request, context: {params: Promise<{id: str
       if (!project || typeof project !== 'object' || Array.isArray(project)) throw new TaskError('Проверьте карточку рабочего проекта.');
       const record = project as Record<string, unknown>;
       try { readWorkBrief(record.brief, record); } catch (error) { throw new TaskError(error instanceof Error ? error.message : 'Проверьте ТЗ.'); }
+      try { readSourceFolderUrl(record.sourceFolderUrl); } catch (error) { throw new TaskError(error instanceof Error ? error.message : 'Проверьте ссылку.'); }
       const fields = [['objectName', 240], ['objectAddress', 300], ['customer', 200], ['responsible', 160]] as const;
       const optionalFields = [['workType', 300], ['baseTemplatePath', 1000]] as const;
       const flags = ['hasWorkAtHeight', 'hasLiftingStructures', 'usesTowerCrane', 'hasMonolithicWork'] as const;

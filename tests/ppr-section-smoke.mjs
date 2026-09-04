@@ -2,6 +2,7 @@
 // model response are used: no Supabase, original documents or paid model requests.
 import assert from 'node:assert/strict';
 import { workspaceSmoke } from './ppr-workspace-smoke.mjs';
+import { sourceFilesSmoke } from './ppr-source-files-smoke.mjs';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
@@ -99,6 +100,8 @@ try {
   let { task } = await create('Создать раздел для учебного проекта');
   const unrelated = (await create('OTHER_TASK_DO_NOT_SEND', 'work-lab')).task;
   ({ task } = await api(`/api/tasks/${task.id}`, { method: 'PATCH', data: { op: 'edit_work_project', revision: task.revision, project } }));
+  task = await sourceFilesSmoke({ api, task, library, fixture, unrelatedId: unrelated.id });
+  project.sourceFolderUrl = task.workProject.sourceFolderUrl;
   const input = () => ({ taskId: task.id, revision: task.revision, sectionId: 'general', templatePath: preview.path, textHash: preview.textHash, sourceHash: preview.sourceHash, chunkIds: ['fragment-1'], confirmDataTransfer: true });
   const generate = (data = input(), status = 200) => api('/api/agents/ppr-section', { method: 'POST', data, status });
   const brief = (op = 'approve', status = 200, extra = {}) => api(`/api/tasks/${task.id}/work-brief`, { method: 'POST', status, data: { op, revision: task.revision, confirm: true, acknowledgeOpenQuestions: true, ...extra } });
@@ -124,7 +127,7 @@ try {
   assert.equal(modelRequests[0].store, false);
   const sent = JSON.stringify(modelRequests[0]);
   assert.ok(sent.includes(source));
-  for (const forbidden of [unselected, unrelated.description, 'fixture-only-not-a-real-key', library, 'PRIVATE_FOLDER_DO_NOT_SEND']) assert.ok(!sent.includes(forbidden), `Unexpected input: ${forbidden}`);
+  for (const forbidden of [unselected, unrelated.description, 'fixture-only-not-a-real-key', library, 'PRIVATE_FOLDER_DO_NOT_SEND', 'PRIVATE_LINK_DO_NOT_SEND']) assert.ok(!sent.includes(forbidden), `Unexpected input: ${forbidden}`);
   assert.ok(sent.includes('Тестовый метод'));
   assert.equal(draft.paragraphs[0].changed, false);
   assert.equal(draft.paragraphs[1].changed, true);

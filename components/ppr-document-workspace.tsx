@@ -20,6 +20,8 @@ import { readWorkBrief, isBriefApproved } from '@/lib/work-brief';
 import { buildPprSectionPlan } from '@/lib/ppr-methodology';
 import { draftableSectionIds } from '@/lib/ppr-drafts';
 import { workApi } from '@/lib/work-client';
+import { PprSourcePicker } from '@/components/ppr-source-picker';
+import { sourceBatchIssue } from '@/lib/work-sources';
 import {
   cacheWorkFile,
   cachedWorkFile,
@@ -59,6 +61,7 @@ export function PprDocumentWorkspace({
     [notice, setNotice] = useState(''),
     [error, setError] = useState('');
   const [configured, setConfigured] = useState<boolean | null>(null);
+  const [pickerBusy, setPickerBusy] = useState(false);
   const [connected, setConnected] = useState(false);
   const [sources, setSources] = useState<File[]>([]),
     [previews, setPreviews] = useState<Inspection[]>([]);
@@ -97,6 +100,10 @@ export function PprDocumentWorkspace({
   const approved = isBriefApproved(task, project);
   const brief = readWorkBrief(project.brief, project);
   useEffect(() => {
+    setSources([]);
+    setPreviews([]);
+  }, [brief.workingFolder]);
+  useEffect(() => {
     const controller = new AbortController();
     workApi<{ configured: boolean }>('/api/agents/ppr-status', token, {
       signal: controller.signal,
@@ -134,7 +141,7 @@ export function PprDocumentWorkspace({
       signal: active.current?.signal,
     });
   const run = async (fn: () => Promise<void>) => {
-    if (active.current || locked) return;
+    if (active.current || locked || pickerBusy) return;
     active.current = new AbortController();
     setBusy(true);
     onBusyChange(true);
@@ -215,7 +222,7 @@ export function PprDocumentWorkspace({
       </p>
       <button
         className="quiet-btn"
-        disabled={busy || locked || configured !== true}
+        disabled={busy || pickerBusy || locked || configured !== true}
         onClick={() =>
           void run(async () => {
             await post({ op: 'probe', confirmConnection: true });
@@ -233,7 +240,7 @@ export function PprDocumentWorkspace({
           Сохраните изменения ТЗ или дождитесь текущего действия.
         </p>
       )}
-      {busy && (
+      {(busy || pickerBusy) && (
         <output className="ppr-busy">
           <LoaderCircle className="spin" />
           Обрабатываю. Повторно нажимать не нужно.
@@ -245,7 +252,10 @@ export function PprDocumentWorkspace({
         </p>
       )}
       {notice && <output className="ppr-notice">{notice}</output>}
-      <fieldset disabled={locked || busy} className="workspace-fieldset">
+      <fieldset
+        disabled={locked || busy || pickerBusy}
+        className="workspace-fieldset"
+      >
         <nav className="ppr-flow-tabs" aria-label="Этапы работы с документами">
           {[
             ['sources', '1. Исходные данные'],
@@ -269,38 +279,30 @@ export function PprDocumentWorkspace({
               Сканам нужно предварительное OCR. Нажмите «Прочитать», чтобы
               увидеть текст до отправки ИИ.
             </p>
-            <label className="ppr-file-pick">
-              <FileUp />
-              Выбрать исходные данные
-              <input
-                type="file"
-                multiple
-                accept=".docx,.pdf,.txt"
-                onChange={(e) => {
-                  setSources(Array.from(e.target.files || []));
-                  setPreviews([]);
-                }}
-              />
-            </label>
-            <ul>
-              {sources.map((f, i) => (
-                <li key={i}>
-                  {f.name} · {(f.size / 1024).toFixed(0)} КБ
-                </li>
-              ))}
-            </ul>
+            <PprSourcePicker
+              key={`${task.id}:${brief.workingFolder}`}
+              taskId={task.id}
+              token={token}
+              url={project.sourceFolderUrl}
+              folder={brief.workingFolder}
+              sources={sources}
+              disabled={locked || busy || pickerBusy}
+              onChange={(files) => {
+                setSources(files);
+                setPreviews([]);
+              }}
+              onBusyChange={(value) => {
+                setPickerBusy(value);
+                onBusyChange(value);
+              }}
+            />
             <button
               className="quiet-btn"
               disabled={!sources.length}
               onClick={() =>
                 void run(async () => {
-                  if (
-                    sources.length > 4 ||
-                    sources.reduce((n, f) => n + f.size, 0) > 2800000
-                  )
-                    throw new Error(
-                      'Выберите до 4 файлов общим размером до 2,8 МБ.',
-                    );
+                  const issue = sourceBatchIssue(sources);
+                  if (issue) throw new Error(issue);
                   const values: Inspection[] = [];
                   for (const file of sources) {
                     const value = await inspect(file);

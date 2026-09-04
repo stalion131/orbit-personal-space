@@ -589,8 +589,8 @@ export function WorkBriefForm({
                   placeholder="Путь к папке проекта"
                 />
                 <small>
-                  Путь сохраняется как реквизит. Доступ ограничен локальной
-                  библиотекой.
+                  Полный путь D:\… или путь внутри библиотеки. На Vercel
+                  выберите эту папку ниже, в исходных данных.
                 </small>
               </label>
               <label>
@@ -622,6 +622,24 @@ export function WorkBriefForm({
                 </small>
               </label>
             </div>
+            <label id="work-source-location">
+              Ссылка на папку с исходными данными
+              <input
+                type="url"
+                value={p.sourceFolderUrl || ''}
+                maxLength={2000}
+                placeholder="https://… — ссылка на папку проекта"
+                onChange={(e) =>
+                  onChange({ ...p, sourceFolderUrl: e.target.value })
+                }
+                aria-describedby="source-link-help"
+              />
+              <small id="source-link-help">
+                Сохраняется вместе с проектом. Ссылку можно открыть, но файлы из
+                облачной папки пока нужно скачать и выбрать для разбора. Не
+                указывайте пароли и API-ключи.
+              </small>
+            </label>
             <div className="schedule-chips">
               {[
                 'Производство работ',
@@ -662,8 +680,9 @@ export function WorkBriefForm({
                 ? 'Есть несохранённые изменения'
                 : 'Все изменения сохранены'}
               <br />
-              После сохранения загрузите файлы в блоке «Рабочий документ».
-              SOL предложит заполнение; выбранные поля применяются только после проверки.
+              После сохранения загрузите файлы в блоке «Рабочий документ». SOL
+              предложит заполнение; выбранные поля применяются только после
+              проверки.
             </div>
             <button className="quiet-btn" onClick={onLibrary}>
               <FolderOpen />

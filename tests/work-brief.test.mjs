@@ -78,6 +78,7 @@ test('Approval invalidates when input changes, while status and manual checks do
     isBriefApproved(task, {
       ...p,
       stage: 'drafting',
+      sourceFolderUrl: 'https://example.org/project',
       checklist: [{ completed: true }],
       documents: [{ name: 'file' }],
     }),

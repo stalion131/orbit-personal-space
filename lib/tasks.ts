@@ -1,5 +1,6 @@
 import { hydratePprDrafts, type SavedPprDraft } from './ppr-drafts';
 import { readPprWorkspace, type PprWorkspace } from './ppr-workspace';
+import { readSourceFolderUrl } from './work-sources';
 import { readWorkBrief, readBriefApprovals, readTkAssignments, type WorkBrief, type BriefApproval, type TkAssignment } from './work-brief';
 
 export const statuses = {
@@ -60,6 +61,7 @@ export type PprScheduleSource = (typeof pprScheduleSources)[number];
 export type WorkDocument = { id: string; name: string; category: WorkDocumentCategory; version: string; status: WorkDocumentStatus; updatedAt: string };
 export type WorkChecklistItem = { id: string; title: string; completed: boolean };
 export type WorkProject = {
+  sourceFolderUrl?: string;
   brief?: WorkBrief;
   documentType: 'ppr' | 'tk'; objectName: string; objectAddress: string; customer: string; responsible: string; stage: WorkProjectStage;
   developmentMode: PprDevelopmentMode; workType: string; baseTemplatePath: string; scheduleSource: PprScheduleSource;
@@ -131,7 +133,7 @@ function hydrateWorkProject(value: unknown): WorkProject | undefined {
     documentType, objectName: text('objectName', 240), objectAddress: text('objectAddress', 300), customer: text('customer', 200), responsible: text('responsible', 160), stage,
     developmentMode, workType: text('workType', 300), baseTemplatePath: text('baseTemplatePath', 1000), scheduleSource,
     hasWorkAtHeight: brief.risks.height === 'yes', hasLiftingStructures: brief.risks.lifting === 'yes', usesTowerCrane, hasMonolithicWork: Boolean(value.hasMonolithicWork),
-    documents, checklist, brief,
+    documents, checklist, brief, sourceFolderUrl: readSourceFolderUrl(value.sourceFolderUrl),
   };
 }
 

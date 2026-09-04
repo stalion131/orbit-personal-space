@@ -1,3 +1,130 @@
+.ppr-source-picker {
+  padding: 18px;
+  background: #101c30;
+  border: 1px solid #425577;
+  border-radius: 16px;
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+}
+.ppr-source-picker > header,
+.ppr-file-search,
+.ppr-source-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.ppr-source-picker > header > svg {
+  color: #ffd99a;
+  flex-shrink: 0;
+}
+.ppr-source-actions {
+  flex-wrap: wrap;
+}
+.ppr-source-actions > label {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+.ppr-source-location {
+  padding: 14px;
+  border-radius: 12px;
+  background: #172840;
+  overflow-wrap: anywhere;
+}
+.ppr-source-location a {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #ffd99a;
+  padding: 6px 0;
+}
+.ppr-source-picker > button {
+  justify-self: start;
+}
+.ppr-source-file-list {
+  max-height: 340px;
+  overflow: auto;
+  border: 1px solid #334963;
+  border-radius: 12px;
+  padding: 4px 12px;
+}
+.ppr-source-file-list > label,
+.ppr-local-file {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 4px;
+  border-bottom: 1px solid #2d405d;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+.ppr-source-file-list > label:hover,
+.ppr-local-file:hover:not(:disabled) {
+  background: #20324c;
+}
+.ppr-source-file-list > label:focus-within {
+  outline: 2px solid #ffd99a;
+  outline-offset: -2px;
+}
+.ppr-source-file-list span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ppr-source-file-list strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+.ppr-source-file-list .unavailable {
+  cursor: default;
+}
+.ppr-source-file-list .unavailable strong {
+  color: #afbed5;
+}
+.ppr-source-file-list .unavailable small:last-child {
+  color: #ffcf96;
+}
+.ppr-local-file {
+  width: 100%;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  border-top: 0;
+  border-left: 0;
+  border-right: 0;
+}
+.ppr-local-file > svg,
+.ppr-file-search > svg {
+  width: 20px;
+  flex-shrink: 0;
+}
+.ppr-file-search input {
+  width: 100%;
+  min-width: 0;
+}
+.ppr-source-selection {
+  padding: 12px;
+  border-radius: 12px;
+  background: #19382f;
+  color: #bde9d6;
+}
+.ppr-source-selection > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
+}
+.ppr-source-selection span {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.ppr-source-selection button {
+  flex-shrink: 0;
+}
 .ppr-document-flow {
   margin: 22px;
   padding: 24px;
