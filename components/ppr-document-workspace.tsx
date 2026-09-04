@@ -22,6 +22,7 @@ import { buildPprSectionPlan } from '@/lib/ppr-methodology';
 import { draftableSectionIds } from '@/lib/ppr-drafts';
 import { workApi } from '@/lib/work-client';
 import { PprSourcePicker } from '@/components/ppr-source-picker';
+import { WorkAction } from '@/components/work-action';
 import {
   sourceBatchIssue,
   sourcePurposes,
@@ -60,12 +61,14 @@ export function PprDocumentWorkspace({
   task,
   token,
   locked,
+  lockReason,
   onSaved,
   onBusyChange,
 }: {
   task: Task;
   token: string | null;
   locked: boolean;
+  lockReason?: string;
   onSaved: (task: Task) => void;
   onBusyChange: (busy: boolean) => void;
 }) {
@@ -74,6 +77,7 @@ export function PprDocumentWorkspace({
     [notice, setNotice] = useState(''),
     [error, setError] = useState('');
   const [configured, setConfigured] = useState<boolean | null>(null);
+  const [configurationFailed, setConfigurationFailed] = useState(false);
   const [pickerBusy, setPickerBusy] = useState(false);
   const [connected, setConnected] = useState(false);
   const [sources, setSources] = useState<File[]>([]),
@@ -113,17 +117,31 @@ export function PprDocumentWorkspace({
   const selectedDraft = currentDrafts.find((d) => d.id === draftId);
   const approved = isBriefApproved(task, project);
   const brief = readWorkBrief(project.brief, project);
+  const configurationBlocker =
+    configured === true
+      ? false
+      : configurationFailed
+        ? 'не удалось проверить настройку API. Сохраните ввод и обновите страницу.'
+        : configured === null
+          ? 'дождитесь проверки настройки API.'
+          : 'добавьте серверный API-ключ для SOL.';
   useEffect(() => {
     setSources([]);
     setPreviews([]);
   }, [brief.workingFolder]);
   useEffect(() => {
     const controller = new AbortController();
+    setConfigurationFailed(false);
     workApi<{ configured: boolean }>('/api/agents/ppr-status', token, {
       signal: controller.signal,
     })
       .then((v) => setConfigured(v.configured))
-      .catch(() => setConfigured(null));
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setConfigured(null);
+          setConfigurationFailed(true);
+        }
+      });
     return () => {
       controller.abort();
       active.current?.abort();
@@ -239,9 +257,13 @@ export function PprDocumentWorkspace({
         Модель: {PPR_MODEL}. Наличие ключа не гарантирует доступ к модели.
         Проверка выполняется при запуске.
       </p>
-      <button
+      <WorkAction
         className="quiet-btn"
-        disabled={busy || pickerBusy || locked || configured !== true}
+        blockedBy={[
+          (busy || pickerBusy) && 'дождитесь завершения обработки.',
+          locked && (lockReason || 'сохраните ТЗ.'),
+          configurationBlocker,
+        ]}
         onClick={() =>
           void run(async () => {
             await post({ op: 'probe', confirmConnection: true });
@@ -253,10 +275,11 @@ export function PprDocumentWorkspace({
         }
       >
         Проверить SOL без данных проекта
-      </button>
+      </WorkAction>
       {locked && (
         <p className="ppr-warning">
-          Сохраните изменения ТЗ или дождитесь текущего действия.
+          {lockReason ||
+            'Сохраните изменения ТЗ или дождитесь текущего действия.'}
         </p>
       )}
       {(busy || pickerBusy) && (
@@ -320,9 +343,11 @@ export function PprDocumentWorkspace({
                 onBusyChange(value);
               }}
             />
-            <button
+            <WorkAction
               className="quiet-btn"
-              disabled={!sources.length}
+              blockedBy={[
+                !sources.length && 'выберите исходные файлы в папке проекта.',
+              ]}
               onClick={() =>
                 void run(async () => {
                   const issue = sourceBatchIssue(sources);
@@ -340,7 +365,7 @@ export function PprDocumentWorkspace({
               }
             >
               Прочитать файлы
-            </button>
+            </WorkAction>
             {previews.length > 0 && (
               <p className="muted">
                 Прочитано{' '}
@@ -412,13 +437,16 @@ export function PprDocumentWorkspace({
                 </details>
               </div>
             ))}
-            <button
+            <WorkAction
               className="quiet-btn"
-              disabled={
-                !previews.length ||
-                previews.length !== sources.length ||
-                !previews.some((p) => purposes[p.file.hash] === 'ppr_contract')
-              }
+              blockedBy={[
+                (!previews.length || previews.length !== sources.length) &&
+                  'выберите и прочитайте исходные файлы.',
+                !previews.some(
+                  (p) => purposes[p.file.hash] === 'ppr_contract',
+                ) &&
+                  'укажите для счёта-договора назначение «Договор на разработку ППР».',
+              ]}
               onClick={() =>
                 void run(async () => {
                   const files = [];
@@ -438,23 +466,25 @@ export function PprDocumentWorkspace({
               }
             >
               Заполнить перечень ТК из договора
-            </button>
+            </WorkAction>
             <p className="hint">
               Сначала прочитайте файлы и выберите назначение «Договор на
               разработку ППР». Находит явно пронумерованные ТК; сложные таблицы
               требуют разбора SOL.
             </p>
             {consentControl}
-            <button
+            <WorkAction
               className="primary-btn"
-              disabled={
-                !consent ||
-                configured !== true ||
-                previews.length !== sources.length ||
+              blockedBy={[
+                !sources.length && 'выберите исходные файлы.',
+                previews.length !== sources.length &&
+                  'нажмите «Прочитать файлы» для выбранного пакета.',
                 previews.reduce((sum, p) => sum + p.file.characters, 0) >
-                  SOURCE_BATCH_TEXT ||
-                !sources.length
-              }
+                  SOURCE_BATCH_TEXT && 'сократите пакет до 300 000 знаков.',
+                configurationBlocker,
+                !consent &&
+                  'отметьте разрешение на передачу выбранных данных в OpenAI.',
+              ]}
               onClick={() =>
                 void run(async () => {
                   const files = [];
@@ -480,7 +510,7 @@ export function PprDocumentWorkspace({
             >
               <Sparkles />
               Автозаполнить ТЗ по исходным данным
-            </button>
+            </WorkAction>
             {analysis && (
               <section className="ppr-proposals">
                 <h4>Проверка предложений</h4>
@@ -558,11 +588,14 @@ export function PprDocumentWorkspace({
                     {w}
                   </p>
                 ))}
-                <button
+                <WorkAction
                   className="primary-btn"
-                  disabled={
-                    !fields.length || analysis.revision !== task.revision
-                  }
+                  blockedBy={[
+                    analysis.revision !== task.revision &&
+                      'повторите анализ: после последнего разбора ТЗ изменилось.',
+                    !fields.length &&
+                      'отметьте предложения, которые хотите применить.',
+                  ]}
                   onClick={() =>
                     void run(async () => {
                       accept(
@@ -579,7 +612,7 @@ export function PprDocumentWorkspace({
                   }
                 >
                   Применить выбранные поля
-                </button>
+                </WorkAction>
                 {analysis.revision !== task.revision && (
                   <small>
                     Разбор уже применён или ТЗ изменилось. Для нового заполнения
@@ -619,9 +652,11 @@ export function PprDocumentWorkspace({
                 }}
               />
             </label>
-            <button
+            <WorkAction
               className="quiet-btn"
-              disabled={!base}
+              blockedBy={[
+                !base && 'выберите шаблон или сохранённую Word-версию.',
+              ]}
               onClick={() =>
                 void run(async () => {
                   if (!base) return;
@@ -631,7 +666,7 @@ export function PprDocumentWorkspace({
               }
             >
               Прочитать шаблон
-            </button>
+            </WorkAction>
             {inspection && (
               <>
                 <p>
@@ -688,14 +723,16 @@ export function PprDocumentWorkspace({
                   </div>
                 </details>
                 {consentControl}
-                <button
+                <WorkAction
                   className="primary-btn"
-                  disabled={
-                    !approved ||
-                    !consent ||
-                    !blocks.length ||
-                    configured !== true
-                  }
+                  blockedBy={[
+                    !approved && 'утвердите актуальную редакцию ТЗ.',
+                    !blocks.length &&
+                      'отметьте фрагменты шаблона для выбранного раздела.',
+                    configurationBlocker,
+                    !consent &&
+                      'отметьте разрешение на передачу данных в OpenAI.',
+                  ]}
                   onClick={() =>
                     void run(async () => {
                       if (!base) return;
@@ -716,7 +753,7 @@ export function PprDocumentWorkspace({
                 >
                   <Sparkles />
                   Подготовить раздел с SOL
-                </button>
+                </WorkAction>
                 <hr />
                 <h4>Вставить проверенный раздел в DOCX</h4>
                 <label>
@@ -802,15 +839,17 @@ export function PprDocumentWorkspace({
                   заголовками, сохранить таблицы. Остальной шаблон ещё нужно
                   проверить и адаптировать.
                 </label>
-                <button
+                <WorkAction
                   className="primary-btn"
-                  disabled={
-                    !approved ||
-                    !selectedDraft ||
-                    !start ||
-                    !end ||
-                    !assemblyConsent
-                  }
+                  blockedBy={[
+                    !approved && 'утвердите актуальную редакцию ТЗ.',
+                    !selectedDraft &&
+                      'подготовьте и выберите версию текста раздела для текущего ТЗ.',
+                    (!start || !end) &&
+                      'выберите начало и конец заменяемого фрагмента.',
+                    !assemblyConsent &&
+                      'подтвердите проверку текста и границ замены.',
+                  ]}
                   onClick={() =>
                     void run(async () => {
                       if (!base) return;
@@ -841,7 +880,7 @@ export function PprDocumentWorkspace({
                 >
                   <Download />
                   Собрать и скачать DOCX
-                </button>
+                </WorkAction>
               </>
             )}
             <h4>История Word-версий</h4>
@@ -927,9 +966,12 @@ export function PprDocumentWorkspace({
                 onChange={(e) => setCorrected(e.target.files?.[0] || null)}
               />
             </label>
-            <button
+            <WorkAction
               className="primary-btn"
-              disabled={!versionId || !corrected}
+              blockedBy={[
+                !versionId && 'выберите Word-версию, которую вы исправляли.',
+                !corrected && 'выберите исправленный DOCX.',
+              ]}
               onClick={() =>
                 void run(async () => {
                   const version = versions.find((v) => v.id === versionId);
@@ -960,7 +1002,7 @@ export function PprDocumentWorkspace({
               }
             >
               Сохранить версию и сравнить
-            </button>
+            </WorkAction>
             {experience && (
               <section className="ppr-proposals">
                 <h4>Что учитывать в следующих разделах</h4>
@@ -1012,9 +1054,13 @@ export function PprDocumentWorkspace({
                     placeholder="Что именно нужно учитывать и в каких случаях?"
                   />
                 </label>
-                <button
+                <WorkAction
                   className="primary-btn"
-                  disabled={!indices.length || !rule.trim()}
+                  blockedBy={[
+                    !indices.length &&
+                      'отметьте изменения, которые нужно запомнить.',
+                    !rule.trim() && 'опишите правило по выбранным изменениям.',
+                  ]}
                   onClick={() =>
                     void run(async () => {
                       accept(
@@ -1033,7 +1079,7 @@ export function PprDocumentWorkspace({
                 >
                   <BookCheck />
                   Подтвердить выбранный опыт
-                </button>
+                </WorkAction>
               </section>
             )}
             <h4>Подтверждённая память проекта</h4>

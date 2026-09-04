@@ -43,6 +43,7 @@ import {
   type WorkProjectStage,
 } from '@/lib/tasks';
 import { useOrbitSession } from '@/lib/use-orbit-session';
+import { AppVersion } from '@/components/app-version';
 import './ppr-studio.css';
 import './work-v2.css';
 
@@ -888,6 +889,7 @@ function ProjectWorkspace({
               }
               token={token}
               locked={dirty || busy || conflict}
+              lockReason={conflict ? 'Проект изменился в другом окне. Сохраните копию своих правок и обновите проект.' : dirty ? 'Сохраните изменения ТЗ, чтобы продолжить работу с документами.' : busy ? 'Дождитесь завершения сохранения проекта.' : ''}
               onSaved={accept}
               onBusyChange={setStudioBusy}
             />
@@ -1062,6 +1064,7 @@ export default function WorkWorkspace() {
           <span>
             <strong>ORBIT WORKS</strong>
             <small>Мастерская ППР и ТК</small>
+            <AppVersion />
           </span>
         </div>
         <Link

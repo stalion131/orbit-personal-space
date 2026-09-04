@@ -43,3 +43,13 @@
 @media(max-width:430px){.subtask-panel{padding:12px}.subtask-row{grid-template-columns:40px minmax(0,1fr);padding:7px}.subtask-check{width:40px;height:40px}.subtask-fields,.subtask-add{grid-template-columns:1fr}.subtask-fields input:first-child,.subtask-add input:first-child,.subtask-add button{grid-column:auto}.subtask-actions{grid-column:2}}
 
 .status-active>header .status-dot{background:#38bdf8;box-shadow:0 0 10px #38bdf8}.status-waiting>header .status-dot{background:#fb923c;box-shadow:0 0 10px #fb923c}.status-paused>header .status-dot{background:#94a3b8;box-shadow:0 0 10px #64748b}.status-waiting .note-task{border-color:rgba(251,146,60,.16)}.status-paused .note-task{opacity:.76}
+
+/* Public release label and inline action prerequisites. */
+.brand-lockup .app-version, .works-brand .app-version {
+  display: block; color: #aebcd1; font-size: .875rem; font-weight: 400;
+  line-height: 1.45; letter-spacing: 0; white-space: normal;
+}
+.work-action-reason {
+  margin: 6px 0 12px; padding-left: 10px; border-left: 2px solid #b49aff;
+  color: #c5cfe0; font-size: .875rem; line-height: 1.5; max-width: 70ch;
+}
