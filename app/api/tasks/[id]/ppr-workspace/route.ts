@@ -132,10 +132,16 @@ export async function POST(
       };
       if (Buffer.byteLength(JSON.stringify(next.pprDrafts || [])) > 500000)
         throw new TaskError('Достигнут лимит текстовых версий 500 КБ.', 409);
+      const payload = { ...response, task: next };
+      if (Buffer.byteLength(JSON.stringify(payload)) > 4_000_000)
+        throw new TaskError(
+          'Файл вместе с историей превышает размер ответа. Соберите меньшую часть документа. Версия не сохранялась.',
+          413,
+        );
       if (access.mode === 'supabase')
         await saveCloudTask(access.client, next, task.revision);
       else await saveTask(next, task.revision);
-      return json({ ...response, task: next }, 201);
+      return json(payload, 201);
     };
     // File operations intentionally have no access to server paths or remote URLs.
     if (data.op === 'probe') {
@@ -156,7 +162,16 @@ export async function POST(
       const document = /\.docx$/i.test(file.name)
         ? inspectDocx(file.bytes)
         : null;
-      return json({ file: extracted, paragraphs: document?.paragraphs || [] });
+      const payload = {
+        file: extracted,
+        paragraphs: document?.paragraphs || [],
+      };
+      if (Buffer.byteLength(JSON.stringify(payload)) > 4_000_000)
+        throw new TaskError(
+          'Превышен объём предпросмотра. Загрузите часть документа.',
+          413,
+        );
+      return json(payload);
     }
     if (data.op === 'analyze') {
       modelConsent();

@@ -110,6 +110,7 @@
 }
 .ppr-document-flow .ppr-consent {
   display: flex;
+  flex-direction: row;
   align-items: flex-start;
   gap: 12px;
   padding: 14px;
@@ -156,6 +157,7 @@
 }
 .ppr-proposal {
   display: flex;
+  flex-direction: row;
   align-items: flex-start;
   gap: 14px;
   padding: 16px;
