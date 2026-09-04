@@ -29,7 +29,7 @@ import {
   type SourcePurpose,
 } from '@/lib/work-sources';
 import {
-  cacheWorkFile,
+  cacheWordVersion,
   cachedWorkFile,
   downloadDocx,
   fileFromWire,
@@ -207,9 +207,11 @@ export function PprDocumentWorkspace({
       }),
       signal: active.current?.signal,
     });
-  const remember = async (file: File, hash: string) => {
+  // Only produced/corrected Word versions belong in persistent browser storage.
+  // Source files and templates remain read-only File references for this session.
+  const rememberWordVersion = async (file: File, hash: string) => {
     try {
-      await cacheWorkFile(task.id, hash, file);
+      await cacheWordVersion(task.id, hash, file);
     } catch (e) {
       setNotice(
         e instanceof Error ? e.message : 'Сохраните файл на компьютере.',
@@ -296,6 +298,11 @@ export function PprDocumentWorkspace({
               знаков. Сканам нужно предварительное OCR. Нажмите «Прочитать»,
               чтобы увидеть текст до отправки ИИ.
             </p>
+            <p className="muted">
+              Исходники — только для чтения. Копии файлов не сохраняются;
+              повторный разбор использует выбранные документы. После закрытия
+              страницы выберите их снова. ТЗ и результаты сохраняются отдельно.
+            </p>
             <PprSourcePicker
               key={`${task.id}:${brief.workingFolder}`}
               taskId={task.id}
@@ -324,7 +331,6 @@ export function PprDocumentWorkspace({
                   for (const file of sources) {
                     const value = await inspect(file);
                     values.push(value);
-                    await remember(file, value.file.hash);
                   }
                   setPreviews(values);
                   setNotice(
@@ -621,7 +627,6 @@ export function PprDocumentWorkspace({
                   if (!base) return;
                   const value = await inspect(base);
                   setInspection(value);
-                  await remember(base, value.file.hash);
                 })
               }
             >
@@ -819,7 +824,7 @@ export function PprDocumentWorkspace({
                       if (reply.file) {
                         const file = fileFromWire(reply.file);
                         downloadDocx(file);
-                        await remember(file, reply.file.hash);
+                        await rememberWordVersion(file, reply.file.hash);
                         setBase(file);
                         setInspection(
                           await inspect(file, reply.task?.revision),
@@ -947,7 +952,7 @@ export function PprDocumentWorkspace({
                   });
                   accept(reply);
                   const saved = reply.task?.pprWorkspace?.versions.at(-1);
-                  if (saved) await remember(corrected, saved.hash);
+                  if (saved) await rememberWordVersion(corrected, saved.hash);
                   setNotice(
                     'Исправленный файл сохранён в истории. Опыт ещё не подтверждён.',
                   );

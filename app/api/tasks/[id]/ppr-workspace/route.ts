@@ -52,6 +52,7 @@ export async function GET(
       configured: !!process.env.OPENAI_API_KEY?.trim(),
       fileLimit: 2500000,
       storage: 'device',
+      sourcePolicy: 'read-only-no-persistent-copy',
     });
   } catch (error) {
     return failure(error);
@@ -80,9 +81,12 @@ export async function POST(
     ) => {
       const documents = [...task.workProject.documents];
       for (const file of files) {
-        if (!documents.some((d) => d.id === `file-${file.hash}`))
+        const id = `file-${file.hash}`;
+        // Older saved registries truncated IDs to 60 characters. Recognize
+        // these without renaming/removing existing user-visible records.
+        if (!documents.some((d) => d.id === id || d.id === id.slice(0, 60)))
           documents.push({
-            id: `file-${file.hash}`,
+            id,
             name: file.name.slice(0, 180),
             category,
             version:
@@ -203,7 +207,19 @@ export async function POST(
         decoded.map((f) => ({ name: f.name, size: f.bytes.length })),
       );
       if (issue) throw new TaskError(issue);
-      for (const value of decoded)
+      // Content identity is independent of the filename. Re-reading a source
+      // never creates a new physical file or another registry record.
+      const uniqueFiles = new Map<string, (typeof decoded)[number]>();
+      for (const value of decoded) {
+        const hash = hashBytes(value.bytes);
+        const previous = uniqueFiles.get(hash);
+        if (previous && previous.purpose !== value.purpose)
+          throw new TaskError(
+            'Один исходный файл выбран с разным назначением. Оставьте один вариант.',
+          );
+        if (!previous) uniqueFiles.set(hash, value);
+      }
+      for (const value of uniqueFiles.values())
         files.push({
           ...(await extractFile(
             value,
@@ -212,11 +228,10 @@ export async function POST(
           purpose: value.purpose,
         });
       if (
-        new Set(files.map((f) => f.hash)).size !== files.length ||
         files.reduce((n, f) => n + f.characters, 0) > SOURCE_BATCH_TEXT
       )
         throw new TaskError(
-          'Уберите повторные файлы или сократите пакет до 300 000 знаков.',
+          'Сократите пакет до 300 000 знаков.',
         );
       const output =
         data.op === 'extract_tk'

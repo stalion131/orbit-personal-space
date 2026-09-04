@@ -102,7 +102,9 @@ try {
   const unrelated = (await create('OTHER_TASK_DO_NOT_SEND', 'work-lab')).task;
   ({ task } = await api(`/api/tasks/${task.id}`, { method: 'PATCH', data: { op: 'edit_work_project', revision: task.revision, project } }));
   await ntdSmoke(api);
-  task = await sourceFilesSmoke({ api, task, library, fixture, unrelatedId: unrelated.id });
+  task = await sourceFilesSmoke({ api, task, library, fixture, unrelatedId: unrelated.id,
+    raw: (path, options = {}) => fetch(`${base}${path}`, { headers, ...options }),
+  });
   project.sourceFolderUrl = task.workProject.sourceFolderUrl;
   const input = () => ({ taskId: task.id, revision: task.revision, sectionId: 'general', templatePath: preview.path, textHash: preview.textHash, sourceHash: preview.sourceHash, chunkIds: ['fragment-1'], confirmDataTransfer: true });
   const generate = (data = input(), status = 200) => api('/api/agents/ppr-section', { method: 'POST', data, status });

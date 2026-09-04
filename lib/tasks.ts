@@ -123,7 +123,10 @@ function hydrateWorkProject(value: unknown): WorkProject | undefined {
     if (!isRecord(candidate) || typeof candidate.id !== 'string' || typeof candidate.name !== 'string' || !candidate.name.trim()) return [];
     const category = workDocumentCategories.includes(candidate.category as WorkDocumentCategory) ? candidate.category as WorkDocumentCategory : 'source';
     const status = workDocumentStatuses.includes(candidate.status as WorkDocumentStatus) ? candidate.status as WorkDocumentStatus : 'expected';
-    return [{ id: candidate.id.slice(0, 60), name: candidate.name.trim().slice(0, 180), category, version: typeof candidate.version === 'string' ? candidate.version.trim().slice(0, 40) : '', status, updatedAt: isIsoDate(candidate.updatedAt) ? candidate.updatedAt as string : new Date().toISOString() }];
+    // Content-based file IDs are 5 + 64 characters. Truncating them breaks
+    // repeat-import detection after a repository read/save round trip.
+    const id = /^file-[a-f0-9]{64}$/.test(candidate.id) ? candidate.id : candidate.id.slice(0, 60);
+    return [{ id, name: candidate.name.trim().slice(0, 180), category, version: typeof candidate.version === 'string' ? candidate.version.trim().slice(0, 40) : '', status, updatedAt: isIsoDate(candidate.updatedAt) ? candidate.updatedAt as string : new Date().toISOString() }];
   }).slice(0, 100) : [];
   const checklist = Array.isArray(value.checklist) ? value.checklist.flatMap(candidate => {
     if (!isRecord(candidate) || typeof candidate.id !== 'string' || typeof candidate.title !== 'string' || !candidate.title.trim()) return [];

@@ -20,6 +20,7 @@ export async function workspaceSmoke({ api, task, setOutput, modelRequests }) {
   await api(path, { status: 403, overrideHeaders: {} });
   await api(`/api/tasks/${randomUUID()}/ppr-workspace`, { status: 404 });
   assert.equal((await api(path)).model, 'gpt-5.6-sol');
+  assert.equal((await api(path)).sourcePolicy, 'read-only-no-persistent-copy');
   await api('/api/agents/ppr-status', { status: 403, overrideHeaders: {} });
   await api('/api/agents/ppr-status', {
     method: 'POST',
@@ -77,6 +78,41 @@ export async function workspaceSmoke({ api, task, setOutput, modelRequests }) {
   assert.equal(task.workProject.brief.methods, existingMethods);
   assert.equal(task.pprWorkspace.analyses.at(-1).applied.length, 1);
   assert.equal(modelRequests.length, beforeTkCalls);
+  const documentsBeforeRepeat = structuredClone(task.workProject.documents);
+  const sourceBeforeRepeat = JSON.stringify(autoContract);
+  ({ task } = await call('extract_tk', {
+    files: [
+      { ...autoContract, purpose: 'ppr_contract' },
+      { ...autoContract, name: 'renamed-copy.txt', purpose: 'ppr_contract' },
+    ],
+    autoFill: true,
+  }));
+  assert.deepEqual(task.workProject.documents, documentsBeforeRepeat,
+    'Repeat/renamed source must not duplicate or alter the registry');
+  assert.equal(task.pprWorkspace.analyses.at(-1).files.length, 1);
+  assert.equal(JSON.stringify(autoContract), sourceBeforeRepeat);
+  assert.equal(modelRequests.length, beforeTkCalls);
+  await call('extract_tk', {
+    files: [
+      { ...autoContract, purpose: 'ppr_contract' },
+      { ...autoContract, purpose: 'construction_contract' },
+    ],
+  }, 400);
+  const readBack = (await api('/api/tasks')).tasks.find((t) => t.id === task.id);
+  assert.deepEqual(readBack.workProject.documents, task.workProject.documents,
+    'Full hash IDs must survive repository hydration');
+  const legacyDocuments = task.workProject.documents.map((d) => ({ ...d, id: d.id.slice(0, 60) }));
+  ({ task } = await api(`/api/tasks/${task.id}`, {
+    method: 'PATCH',
+    data: { op: 'edit_work_project', revision: task.revision,
+      project: { ...task.workProject, documents: legacyDocuments } },
+  }));
+  ({ task } = await call('extract_tk', {
+    files: [{ ...autoContract, name: 'another-name.txt', purpose: 'ppr_contract' }],
+    autoFill: true,
+  }));
+  assert.deepEqual(task.workProject.documents, legacyDocuments,
+    'Previously truncated IDs must be recognized without changing existing records');
   const pdf = await call(
     'inspect',
     { file: wire('source.pdf', pdfFixture()) },
@@ -177,7 +213,10 @@ export async function workspaceSmoke({ api, task, setOutput, modelRequests }) {
   );
   await call(
     'analyze',
-    { files: [source, source], confirmDataTransfer: true },
+    { files: [
+      { ...source, purpose: 'ppr_contract' },
+      { ...source, purpose: 'construction_contract' },
+    ], confirmDataTransfer: true },
     400,
   );
   assert.equal(modelRequests.length, requestCount);

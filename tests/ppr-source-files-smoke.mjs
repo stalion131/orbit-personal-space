@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile, symlink } from 'node:fs/promises';
+import { mkdir, writeFile, symlink, readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export async function sourceFilesSmoke({
@@ -9,6 +9,7 @@ export async function sourceFilesSmoke({
   library,
   fixture,
   unrelatedId,
+  raw,
 }) {
   const base = `/api/tasks/${task.id}`,
     path = `${base}/ppr-source-files`;
@@ -77,6 +78,34 @@ export async function sourceFilesSmoke({
   assert.equal(listing.unavailable, 1);
   const files = await api(`${path}?path=sources`);
   assert.equal(files.items[0].downloadPath, 'project/sources/input.txt');
+  // Real filesystem fixture: repeated parsing must not rewrite the original
+  // or create adjacent copies. The read endpoints reject write methods.
+  const originalPath = join(nested, 'input.txt');
+  const originalBytes = await readFile(originalPath);
+  const originalStat = await stat(originalPath);
+  const namesBefore = await readdir(nested);
+  const readPath = '/api/work-files/download?path=project%2Fsources%2Finput.txt';
+  for (const endpoint of [readPath, path]) {
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+      const response = await raw(endpoint, { method });
+      assert.equal(response.status, 405, `${method} must not modify source files`);
+      await response.text();
+    }
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await raw(readPath);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('cache-control'), /no-store/);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), originalBytes);
+    await api(`${base}/ppr-workspace`, {
+      method: 'POST',
+      data: { op: 'inspect', revision: task.revision,
+        file: { name: 'input.txt', base64: originalBytes.toString('base64') } },
+    });
+  }
+  assert.deepEqual(await readFile(originalPath), originalBytes);
+  assert.equal((await stat(originalPath)).mtimeMs, originalStat.mtimeMs);
+  assert.deepEqual(await readdir(nested), namesBefore);
   await api(`${path}?path=..%2F`, { status: 403 });
   await api(`${path}?path=outside-link`, { status: 403 });
   await setFolder(outside);

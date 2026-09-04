@@ -24,7 +24,8 @@ export async function GET(request: Request) {
     if (!info.isFile()) throw new TaskError('Файл не найден.', 404);
     const name = basename(target);
     const extension = name.split('.').pop()?.toLocaleLowerCase() || '';
-    return new Response(Readable.toWeb(createReadStream(target)) as ReadableStream, {
+    // The source endpoint opens originals for reading only; no write API exists.
+    return new Response(Readable.toWeb(createReadStream(target, { flags: 'r' })) as ReadableStream, {
       headers: {
         'Content-Type': mime[extension] || 'application/octet-stream',
         'Content-Length': String(info.size),

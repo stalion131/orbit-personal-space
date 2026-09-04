@@ -17,7 +17,8 @@ function openCache(): Promise<IDBDatabase> {
       );
   });
 }
-export async function cacheWorkFile(taskId: string, hash: string, file: File) {
+// Persistent storage is reserved for Word results, never source documents.
+export async function cacheWordVersion(taskId: string, hash: string, file: File) {
   const db = await openCache();
   try {
     await new Promise<void>((resolve, reject) => {

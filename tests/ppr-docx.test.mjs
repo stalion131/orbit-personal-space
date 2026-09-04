@@ -39,6 +39,7 @@ const fixture = (extra = '', entries = {}) =>
 test('DOCX retains package parts, tables, headers and unchanged sections; changes are blue', () => {
   const original = fixture(),
     info = inspectDocx(original);
+  const originalSnapshot = original.slice();
   const start = info.paragraphs.find((p) => p.text.startsWith('1 ')).id,
     end = info.paragraphs.find((p) => p.text.startsWith('2 ')).id;
   const output = assembleDocx(original, [
@@ -50,6 +51,7 @@ test('DOCX retains package parts, tables, headers and unchanged sections; change
   ]);
   const before = unzipSync(original),
     after = unzipSync(output);
+  assert.deepEqual(original, originalSnapshot, 'Assembly must not mutate the source template');
   for (const name of Object.keys(before))
     if (name !== 'word/document.xml')
       assert.deepEqual(after[name], before[name], name);
