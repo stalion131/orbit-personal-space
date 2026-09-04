@@ -1,6 +1,7 @@
 'use client';
 /* oxlint-disable react-compiler/effect-set-state */
 import { useState } from 'react';
+import { WorkRiskPicker } from '@/components/work-risk-picker';
 import {
   ChevronDown,
   Check,
@@ -17,8 +18,6 @@ import {
   briefWarnings,
   isBriefApproved,
   readWorkBrief,
-  riskLabels,
-  type RiskState,
   type Signatory,
   type WorkBrief,
 } from '@/lib/work-brief';
@@ -458,46 +457,7 @@ export function WorkBriefForm({
                   </label>
                 </div>
                 <div>
-                  <span className="field-label">Риски и особые условия</span>
-                  <div className="risk-grid">
-                    {Object.entries(riskLabels).map(([key, label]) => (
-                      <label
-                        className={`risk ${b.risks[key as keyof typeof riskLabels]}`}
-                        key={key}
-                      >
-                        {label}
-                        <select
-                          value={b.risks[key as keyof typeof riskLabels]}
-                          onChange={(e) => {
-                            const state = e.target.value as RiskState;
-                            onChange({
-                              ...p,
-                              hasWorkAtHeight:
-                                key === 'height'
-                                  ? state === 'yes'
-                                  : p.hasWorkAtHeight,
-                              hasLiftingStructures:
-                                key === 'lifting'
-                                  ? state === 'yes'
-                                  : p.hasLiftingStructures,
-                              usesTowerCrane:
-                                key === 'lifting' && state !== 'yes'
-                                  ? false
-                                  : p.usesTowerCrane,
-                              brief: {
-                                ...b,
-                                risks: { ...b.risks, [key]: state },
-                              },
-                            });
-                          }}
-                        >
-                          <option value="unknown">Уточнить</option>
-                          <option value="yes">Да</option>
-                          <option value="no">Нет</option>
-                        </select>
-                      </label>
-                    ))}
-                  </div>
+                  <WorkRiskPicker project={p} onChange={onChange} />
                   <label>
                     Другие риски
                     <input

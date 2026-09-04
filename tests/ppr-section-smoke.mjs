@@ -1,3 +1,4 @@
+import { ntdSmoke } from './ntd-smoke.mjs';
 // Runs the built application in isolation. Only synthetic fixtures and a loopback
 // model response are used: no Supabase, original documents or paid model requests.
 import assert from 'node:assert/strict';
@@ -100,6 +101,7 @@ try {
   let { task } = await create('Создать раздел для учебного проекта');
   const unrelated = (await create('OTHER_TASK_DO_NOT_SEND', 'work-lab')).task;
   ({ task } = await api(`/api/tasks/${task.id}`, { method: 'PATCH', data: { op: 'edit_work_project', revision: task.revision, project } }));
+  await ntdSmoke(api);
   task = await sourceFilesSmoke({ api, task, library, fixture, unrelatedId: unrelated.id });
   project.sourceFolderUrl = task.workProject.sourceFolderUrl;
   const input = () => ({ taskId: task.id, revision: task.revision, sectionId: 'general', templatePath: preview.path, textHash: preview.textHash, sourceHash: preview.sourceHash, chunkIds: ['fragment-1'], confirmDataTransfer: true });

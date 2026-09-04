@@ -1,4 +1,5 @@
 'use client';
+import { NtdLibraryPanel } from '@/components/ntd-library';
 /* oxlint-disable react/react-compiler, react-compiler/effect-set-state, react-hooks/exhaustive-deps */
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
@@ -82,7 +83,7 @@ const agents = [
     name: 'Специалист по НТД',
     description: 'Требования и ссылки на нормативные документы',
     icon: LibraryBig,
-    state: 'Ждёт базу НТД',
+    state: 'Автопроверка не подключена',
   },
   {
     name: 'Контролёр качества',
@@ -457,7 +458,7 @@ function ProjectWorkspace({
             {
               id: 'ntd',
               title: 'Нормативный контроль',
-              value: 'Ожидает базу НТД',
+              value: 'Реестр и поиск',
               detail: 'Автоматическая проверка не подключена',
               icon: ShieldCheck,
             },
@@ -688,22 +689,7 @@ function ProjectWorkspace({
               </>
             )}
             {panel === 'ntd' && (
-              <>
-                <h2>Специалист по нормативной документации</h2>
-                <p>
-                  Роль сохранена в команде. После подключения проверенной базы
-                  НТД здесь появятся замечания, ссылки на пункты и результат
-                  проверки раздела.
-                </p>
-                <button className="quiet-btn" disabled>
-                  <ShieldCheck />
-                  Проверка пока недоступна
-                </button>
-                <p className="hint">
-                  Сейчас документ не получает автоматическую отметку
-                  соответствия нормативам.
-                </p>
-              </>
+              <NtdLibraryPanel key={token ?? 'local'} token={token} />
             )}
             {panel === 'checklist' && (
               <>

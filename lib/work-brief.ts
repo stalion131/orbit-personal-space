@@ -1,4 +1,5 @@
 import type { Task, WorkProject } from './tasks';
+import { permitRiskLabels, type PermitRiskId } from './permit-risk-catalog.ts';
 
 export const riskLabels = {
   height: 'Работы на высоте',
@@ -33,6 +34,7 @@ export type WorkBrief = {
   tkList: string[];
   risks: Record<keyof typeof riskLabels, RiskState>;
   otherRisks: string;
+  permitRisks?: Partial<Record<PermitRiskId, RiskState>>;
 };
 export type BriefSnapshot = Pick<
   WorkProject,
@@ -103,6 +105,18 @@ export function readWorkBrief(
   legacy: Partial<WorkProject> = {},
 ): WorkBrief {
   const d = v === undefined ? {} : object(v);
+  const permitRisks: Partial<Record<PermitRiskId, RiskState>> = {};
+  if (d.permitRisks !== undefined) {
+    for (const [id, state] of Object.entries(object(d.permitRisks))) {
+      if (
+        !Object.hasOwn(permitRiskLabels, id) ||
+        typeof state !== 'string' ||
+        !['yes', 'no', 'unknown'].includes(state)
+      )
+        throw new Error('Неверный сценарий риска.');
+      permitRisks[id as PermitRiskId] = state as RiskState;
+    }
+  }
   const riskValues = d.risks === undefined ? {} : object(d.risks);
   const risks = Object.fromEntries(
     Object.keys(riskLabels).map((key) => {
@@ -148,6 +162,7 @@ export function readWorkBrief(
     tkList: strings(d.tkList, 30, 200),
     risks,
     otherRisks: string(d.otherRisks, 1000),
+    ...(Object.keys(permitRisks).length ? { permitRisks } : {}),
   };
 }
 export function briefSnapshot(p: WorkProject): BriefSnapshot {
@@ -217,7 +232,19 @@ export function briefWarnings(project: WorkProject) {
 export function briefForAgent(project: WorkProject) {
   const { workingFolder: _workingFolder, ...brief } =
     project.brief || readWorkBrief(undefined, project);
-  return brief;
+  return {
+    ...brief,
+    ...(brief.permitRisks
+      ? {
+          permitRiskDescriptions: Object.fromEntries(
+            Object.keys(brief.permitRisks).map((id) => [
+              id,
+              permitRiskLabels[id as PermitRiskId],
+            ]),
+          ),
+        }
+      : {}),
+  };
 }
 
 export function readBriefApprovals(value: unknown): BriefApproval[] {

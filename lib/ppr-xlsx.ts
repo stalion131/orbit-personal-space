@@ -45,7 +45,7 @@ const standardFormats: Record<number, string> = {
 };
 
 // Read only physically present cells: a formatted row at 1048576 must not allocate a million-row matrix.
-export function inspectXlsx(bytes: Uint8Array) {
+export function inspectXlsx(bytes: Uint8Array, includeCells = false) {
   const entries = officePackage(bytes, 'XLSX');
   const part = (path: string) =>
     entries[path] ? officeXml(strFromU8(entries[path])) : invalid();
@@ -94,6 +94,13 @@ export function inspectXlsx(bytes: Uint8Array) {
     throw new Error('Нужно от 1 до 40 листов XLSX. Разделите книгу.');
   const blocks: TextBlock[] = [];
   const sheets: { name: string; cells: number; hidden: boolean }[] = [];
+  const cells: {
+    sheet: string;
+    address: string;
+    value: string;
+    formula: boolean;
+    error: boolean;
+  }[] = [];
   let cellCount = 0,
     formulaCount = 0,
     missing = 0,
@@ -216,6 +223,16 @@ export function inspectXlsx(bytes: Uint8Array) {
             }
           }
         }
+        if (includeCells)
+          cells.push({
+            sheet: name,
+            address: a,
+            value:
+              notes.find((n) => n.startsWith('дата/время ISO: '))?.slice(16) ||
+              value,
+            formula: !!formula,
+            error: kind === 'e',
+          });
         lines.push(
           `${a}: ${value}${notes.length ? ` [${notes.join('; ')}]` : ''}`,
         );
@@ -260,5 +277,5 @@ export function inspectXlsx(bytes: Uint8Array) {
     warnings.push(
       `Прочитано ячеек в скрытых областях: ${hiddenCount}. Они явно помечены в тексте.`,
     );
-  return { blocks, warnings, sheets };
+  return { blocks, warnings, sheets, cells };
 }
