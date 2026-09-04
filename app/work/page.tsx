@@ -159,8 +159,10 @@ function ProjectWorkspace({
     enabled: boolean;
     templates: { path: string; name: string }[];
   }>({ enabled: false, templates: [] });
-  const dirty =
-    !task.workProject || JSON.stringify(project) !== JSON.stringify(baseline);
+  const changed = JSON.stringify(project) !== JSON.stringify(baseline);
+  // A newly initialized empty project still needs saving before API operations,
+  // but contains no edits to lose when switching to another task.
+  const dirty = !task.workProject || changed;
   const conflict = revision !== task.revision;
   const approved = isBriefApproved(task, project);
   const plan = buildPprSectionPlan(project);
@@ -184,16 +186,16 @@ function ProjectWorkspace({
     onSaved(t);
   };
   useEffect(() => {
-    onDirty(dirty || busy || studioBusy);
+    onDirty(changed || busy || studioBusy);
     return () => onDirty(false);
-  }, [dirty, busy, studioBusy]);
+  }, [changed, busy, studioBusy]);
   useEffect(() => {
     const unload = (e: BeforeUnloadEvent) => {
-      if (dirty || busy || studioBusy) e.preventDefault();
+      if (changed || busy || studioBusy) e.preventDefault();
     };
     window.addEventListener('beforeunload', unload);
     return () => window.removeEventListener('beforeunload', unload);
-  }, [dirty, busy, studioBusy]);
+  }, [changed, busy, studioBusy]);
   useEffect(() => {
     let alive = true;
     workApi<typeof library>('/api/work-templates', token)
@@ -1070,6 +1072,7 @@ export default function WorkWorkspace() {
               value={selected?.id || ''}
               onChange={(e) => {
                 if (allowedToLeave()) setSelectedId(e.target.value);
+                else e.currentTarget.value = selected?.id || '';
               }}
             >
               {filtered.map((t) => (
