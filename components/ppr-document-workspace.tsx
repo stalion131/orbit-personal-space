@@ -12,6 +12,7 @@ import type { Task } from '@/lib/tasks';
 import {
   fieldLabels,
   fieldValue,
+  hasSignatoryPosition,
   PPR_MODEL,
   type BriefField,
   type TextBlock,
@@ -138,7 +139,9 @@ export function PprDocumentWorkspace({
         .filter(
           (p) =>
             !fieldValue(project, brief, p.field) ||
-            fieldValue(project, brief, p.field) === 'unknown',
+            fieldValue(project, brief, p.field) === 'unknown' ||
+            (p.field.endsWith('.position') &&
+              !hasSignatoryPosition(fieldValue(project, brief, p.field))),
         )
         .map((p) => p.field),
     );

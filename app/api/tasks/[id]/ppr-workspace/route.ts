@@ -16,6 +16,8 @@ import {
   PPR_MODEL,
   readPprWorkspace,
   verifiedProposals,
+  proposalsWithKnownPositions,
+  hasSignatoryPosition,
   type BriefField,
 } from '@/lib/ppr-workspace';
 import { isBriefApproved, readWorkBrief } from '@/lib/work-brief';
@@ -219,7 +221,7 @@ export async function POST(
         workspace,
         AbortSignal.any([request.signal, AbortSignal.timeout(55000)]),
       );
-      const proposals = verifiedProposals(output.proposals, files).filter(
+      const validated = verifiedProposals(output.proposals, files).filter(
         (p) => {
           try {
             const next = applyProposals(
@@ -238,6 +240,10 @@ export async function POST(
           }
         },
       );
+      const proposals = proposalsWithKnownPositions(
+        validated,
+        readWorkBrief(task.workProject.brief, task.workProject),
+      );
       workspace.analyses.push({
         id: crypto.randomUUID(),
         at: now,
@@ -255,7 +261,7 @@ export async function POST(
         warnings: [
           ...(proposals.length !== output.proposals.length
             ? [
-                'Исключены предложения без проверяемой цитаты, с неверным значением или подменой строительных сторон из договора на разработку ППР.',
+                'Исключены предложения без проверяемой цитаты, с неверным значением, ФИО без известной должности или подменой строительных сторон из договора на разработку ППР.',
               ]
             : []),
           ...files.flatMap((f) =>
@@ -298,6 +304,15 @@ export async function POST(
         proposals.filter((p) => !!p),
       );
       project.brief = readWorkBrief(project.brief, project);
+      for (const side of ['contractor', 'customer'] as const) {
+        if (
+          data.fields.includes(`brief.${side}.fullName`) &&
+          !hasSignatoryPosition(project.brief[side].position)
+        )
+          throw new TaskError(
+            'ФИО нельзя применить без должности. Выберите также проверенное предложение должности или оставьте оба поля пустыми.',
+          );
+      }
       analysis.applied = data.fields as BriefField[];
       return commit('Применены выбранные предложения для ТЗ', {
         workProject: project,

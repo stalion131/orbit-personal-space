@@ -2,7 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { inspectXlsx } from '../lib/ppr-xlsx.ts';
 import { extractFile } from '../lib/ppr-docx.ts';
-import { verifiedProposals } from '../lib/ppr-workspace.ts';
+import {
+  verifiedProposals,
+  proposalsWithKnownPositions,
+} from '../lib/ppr-workspace.ts';
+import { readWorkBrief } from '../lib/work-brief.ts';
 import { readSourcePurpose } from '../lib/work-sources.ts';
 import { xlsxFixture } from './xlsx-fixture.mjs';
 
@@ -95,4 +99,37 @@ test('Source purpose blocks construction-party substitution from a PPR developer
   );
   assert.equal(readSourcePurpose(undefined), 'unspecified');
   assert.throws(() => readSourcePurpose('__proto__'));
+});
+
+test('Signatory names require a known position on the same party; placeholders do not count', () => {
+  const name = {
+    field: 'brief.contractor.fullName',
+    value: 'Иванов Иван Иванович',
+  };
+  const position = {
+    field: 'brief.contractor.position',
+    value: 'Генеральный директор',
+  };
+  const empty = readWorkBrief(undefined);
+  assert.deepEqual(proposalsWithKnownPositions([name], empty), []);
+  assert.deepEqual(proposalsWithKnownPositions([name, position], empty), [
+    name,
+    position,
+  ]);
+  assert.deepEqual(
+    proposalsWithKnownPositions(
+      [name, { ...position, value: 'Руководитель организации' }],
+      empty,
+    ),
+    [],
+  );
+  assert.deepEqual(
+    proposalsWithKnownPositions(
+      [name, { ...position, field: 'brief.customer.position' }],
+      empty,
+    ),
+    [{ ...position, field: 'brief.customer.position' }],
+  );
+  const known = readWorkBrief({ contractor: { position: 'Директор' } });
+  assert.deepEqual(proposalsWithKnownPositions([name], known), [name]);
 });

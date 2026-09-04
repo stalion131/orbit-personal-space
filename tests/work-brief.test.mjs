@@ -55,6 +55,8 @@ test('Legacy flags are conservative; missing people and signatories are not inve
   assert.equal(b.people, null);
   assert.equal(b.customer.organization, 'Заказчик');
   assert.equal(b.customer.fullName, '');
+  assert.equal(b.customer.position, '');
+  assert.equal(b.contractor.position, '');
   assert.equal(b.contractor.authority, '');
   const p = project();
   assert.ok(

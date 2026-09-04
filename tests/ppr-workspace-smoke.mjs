@@ -47,7 +47,12 @@ export async function workspaceSmoke({ api, task, setOutput, modelRequests }) {
     pdf.file.blocks.some((b) => b.text.includes('SITE DATA 24')),
     'Digital PDF extraction must work in the built server.',
   );
-  const source = wire('source.txt', Buffer.from('Адрес: Учебная улица, 1'));
+  const source = wire(
+    'source.txt',
+    Buffer.from(
+      'Адрес: Учебная улица, 1\nПодрядчик: генеральный директор Иванов Иван Иванович. Заказчик: Петров Пётр Петрович, должность не указана.',
+    ),
+  );
   const inspected = await call('inspect', { file: source }, 200);
   const excel = wire('volumes.xlsx', xlsxFixture());
   const table = await call('inspect', { file: excel }, 200);
@@ -64,6 +69,30 @@ export async function workspaceSmoke({ api, task, setOutput, modelRequests }) {
   );
   setOutput({
     proposals: [
+      {
+        field: 'brief.contractor.fullName',
+        value: 'Иванов Иван Иванович',
+        fileHash: inspected.file.hash,
+        blockId: inspected.file.blocks[0].id,
+        quote: 'генеральный директор Иванов Иван Иванович',
+        reason: 'Руководитель по умолчанию, проверить полномочия',
+      },
+      {
+        field: 'brief.contractor.position',
+        value: 'Генеральный директор',
+        fileHash: inspected.file.hash,
+        blockId: inspected.file.blocks[0].id,
+        quote: 'генеральный директор Иванов Иван Иванович',
+        reason: 'Должность в документе',
+      },
+      {
+        field: 'brief.customer.fullName',
+        value: 'Петров Пётр Петрович',
+        fileHash: inspected.file.hash,
+        blockId: inspected.file.blocks[0].id,
+        quote: 'Петров Пётр Петрович',
+        reason: 'Имя без должности должно исключаться',
+      },
       {
         field: 'objectAddress',
         value: 'Учебная улица, 1',
@@ -124,7 +153,10 @@ export async function workspaceSmoke({ api, task, setOutput, modelRequests }) {
     confirmDataTransfer: true,
   }));
   const analysis = task.pprWorkspace.analyses.at(-1);
-  assert.equal(analysis.proposals.length, 2);
+  assert.equal(analysis.proposals.length, 4);
+  assert.ok(
+    !analysis.proposals.some((p) => p.field === 'brief.customer.fullName'),
+  );
   assert.equal(analysis.files.length, 5);
   assert.equal(analysis.files[2].purpose, 'ppr_contract');
   assert.ok(analysis.warnings.some((w) => w.includes('Нет результата: 1')));
@@ -151,11 +183,29 @@ export async function workspaceSmoke({ api, task, setOutput, modelRequests }) {
     !JSON.stringify(modelRequests.at(-1)).includes('PRIVATE_LINK_DO_NOT_SEND'),
   );
   await call('apply', { analysisId: analysis.id, fields: ['workType'] }, 400);
+  await call(
+    'apply',
+    { analysisId: analysis.id, fields: ['brief.contractor.fullName'] },
+    400,
+  );
   ({ task } = await call('apply', {
     analysisId: analysis.id,
-    fields: ['objectAddress'],
+    fields: [
+      'objectAddress',
+      'brief.contractor.fullName',
+      'brief.contractor.position',
+    ],
   }));
   assert.equal(task.workProject.objectAddress, 'Учебная улица, 1');
+  assert.equal(
+    task.workProject.brief.contractor.fullName,
+    'Иванов Иван Иванович',
+  );
+  assert.equal(
+    task.workProject.brief.contractor.position,
+    'Генеральный директор',
+  );
+  assert.equal(task.workProject.brief.customer.fullName, '');
   await call(
     'apply',
     { analysisId: analysis.id, fields: ['objectAddress'] },

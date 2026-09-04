@@ -93,7 +93,7 @@ function signatory(v: unknown, fallback = ''): Signatory {
   const data = v === undefined ? {} : object(v);
   return {
     organization: string(data.organization, 200, fallback),
-    position: string(data.position, 160, 'Руководитель организации'),
+    position: string(data.position, 160),
     fullName: string(data.fullName, 160),
     authority: string(data.authority, 500),
   };

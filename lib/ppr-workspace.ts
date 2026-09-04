@@ -263,6 +263,31 @@ export function verifiedProposals(
     .slice(0, 28);
 }
 
+export function hasSignatoryPosition(position: string): boolean {
+  return (
+    !!position.trim() &&
+    !/^(руководитель организации|не указано|не указана|уточнить|неизвестно)$/i.test(
+      position.trim(),
+    )
+  );
+}
+
+export function proposalsWithKnownPositions(
+  proposals: FieldProposal[],
+  brief: WorkBrief,
+): FieldProposal[] {
+  return proposals.filter((p) => {
+    const match = /^brief\.(contractor|customer)\.fullName$/.exec(p.field);
+    if (!match)
+      return !p.field.endsWith('.position') || hasSignatoryPosition(p.value);
+    const side = match[1] as 'contractor' | 'customer';
+    const proposed = proposals.find(
+      (v) => v.field === `brief.${side}.position`,
+    );
+    return hasSignatoryPosition(proposed?.value || brief[side].position);
+  });
+}
+
 export function confirmedExperience(workspace?: PprWorkspace) {
   return (workspace?.experience || [])
     .filter((e) => e.confirmedAt)
