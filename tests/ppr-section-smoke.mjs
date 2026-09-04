@@ -1,6 +1,7 @@
 // Runs the built application in isolation. Only synthetic fixtures and a loopback
 // model response are used: no Supabase, original documents or paid model requests.
 import assert from 'node:assert/strict';
+import { workspaceSmoke } from './ppr-workspace-smoke.mjs';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
@@ -28,6 +29,7 @@ await writeFile(join(index, 'manifest.json'), JSON.stringify({ schema: 'orbit-lo
 
 const modelRequests = [];
 let failModel = false;
+let workspaceOutput = null;
 const provider = createServer(async (req, res) => {
   if (req.url !== '/v1/responses') { res.writeHead(404).end(); return; }
   const chunks = [];
@@ -36,7 +38,7 @@ const provider = createServer(async (req, res) => {
   if (failModel) { res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: { message: 'PRIVATE_PROVIDER_ERROR_MARKER', type: 'invalid_request_error' } })); return; }
   res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
     id: `resp_${randomUUID()}`, object: 'response', created_at: Math.floor(Date.now() / 1000), status: 'completed', model: 'gpt-4o-mini',
-    output: [{ id: 'msg_fixture', type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(JSON.stringify(modelRequests.at(-1).input).includes('previousDialogue') ? { overview: 'Нужно уточнить условия площадки.', readiness: 'needs_data', sections: [], missingInformation: [], questions: ['Уточните численность.'], handoffs: [], warnings: [] } : { paragraphs: [source, 'Уточнить исходные данные учебного объекта.'], questions: ['Уточнить перечень работ.'], warnings: [] }), annotations: [] }] }],
+    output: [{ id: 'msg_fixture', type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: JSON.stringify(workspaceOutput || (JSON.stringify(modelRequests.at(-1).input).includes('previousDialogue') ? { overview: 'Нужно уточнить условия площадки.', readiness: 'needs_data', sections: [], missingInformation: [], questions: ['Уточните численность.'], handoffs: [], warnings: [] } : { paragraphs: [source, 'Уточнить исходные данные учебного объекта.'], questions: ['Уточнить перечень работ.'], warnings: [] })), annotations: [] }] }],
     usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } },
   }));
 });
@@ -169,6 +171,7 @@ try {
   assert.equal(task.tkAssignments.length, 2); assert.equal(task.pprDrafts.length, 2);
   const afterTk = (await api('/api/tasks')).tasks.find(v => v.id === task.id);
   assert.deepEqual(afterTk.tkAssignments, task.tkAssignments);
+  task = await workspaceSmoke({ api, task, setOutput: value => { workspaceOutput = value; }, modelRequests });
   failModel = true;
   const providerFailure = await generate(input(), 502);
   assert.ok(!JSON.stringify(providerFailure).includes('PRIVATE_PROVIDER_ERROR_MARKER'));

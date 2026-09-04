@@ -24,6 +24,9 @@ import { WorkBriefForm, downloadJson } from '@/components/work-brief-form';
 import { WorkLibrary } from '@/components/work-library';
 import { WorkProjectDialog } from '@/components/work-project-dialog';
 import { PprSectionStudio } from '@/components/ppr-section-studio';
+import { PprDocumentWorkspace } from '@/components/ppr-document-workspace';
+import { PprConnectionStatus } from '@/components/ppr-connection-status';
+import './ppr-document.css';
 import { workApi } from '@/lib/work-client';
 import { briefIssues, isBriefApproved, readWorkBrief } from '@/lib/work-brief';
 import { buildPprSectionPlan } from '@/lib/ppr-methodology';
@@ -65,9 +68,9 @@ const documentStatuses: Record<WorkDocumentStatus, string> = {
 const agents = [
   {
     name: 'Разработчик ППР',
-    description: 'Уточнения, карта ППР и черновики разделов',
+    description: 'SOL: исходные данные, ТЗ и текстовые разделы ППР',
     icon: HardHat,
-    state: 'MVP · требуется ключ OpenAI',
+    state: 'SOL · доступ проверяется при запуске',
   },
   {
     name: 'Разработчик ТК',
@@ -379,7 +382,10 @@ function ProjectWorkspace({
           </button>
         </div>
       )}
-      <fieldset className="workspace-fieldset" disabled={busy || studioBusy || conflict}>
+      <fieldset
+        className="workspace-fieldset"
+        disabled={busy || studioBusy || conflict}
+      >
         <WorkBriefForm
           task={task}
           project={project}
@@ -850,7 +856,7 @@ function ProjectWorkspace({
           task={task}
           project={project}
           token={token}
-          dirty={dirty || busy || conflict}
+          dirty={dirty || busy || studioBusy || conflict}
         />
         <section className="working-document" id="working-document">
           <header>
@@ -860,6 +866,25 @@ function ProjectWorkspace({
             </div>
             <span className="badge">Черновик · инженерная проверка</span>
           </header>
+          {project.documentType === 'ppr' && (
+            <PprDocumentWorkspace
+              task={
+                task.workProject
+                  ? task
+                  : { ...task, workProject: initialProject(task) }
+              }
+              token={token}
+              locked={dirty || busy || conflict}
+              onSaved={accept}
+              onBusyChange={setStudioBusy}
+            />
+          )}
+          {project.documentType === 'ppr' && !task.workProject && (
+            <p className="ppr-warning">
+              Сохраните черновик ТЗ — здесь появятся чтение файлов, SOL и сборка
+              Word. Сначала можно сохранить только известные сведения.
+            </p>
+          )}
           {project.documentType === 'ppr' && (
             <label className="document-section-label">
               Раздел
@@ -887,7 +912,7 @@ function ProjectWorkspace({
               }
               onSection={setSection}
               onSaveProject={() => void save()}
-              projectSaving={busy || conflict}
+              projectSaving={busy || studioBusy || conflict}
               onBusyChange={setStudioBusy}
               onSaved={accept}
               embedded
@@ -899,9 +924,8 @@ function ProjectWorkspace({
           <footer className="document-future">
             <FileText />
             <span>
-              Сейчас можно редактировать текст черновика и сохранять версии.
-              Загрузка исправленного DOCX, защита постоянных фрагментов и
-              проверки другими агентами — следующие этапы.
+              DOCX остаётся черновиком до инженерной проверки. Специалисты по
+              НТД, ТК и независимому контролю ещё не подключены.
             </span>
           </footer>
         </section>
@@ -934,6 +958,7 @@ function ProjectWorkspace({
                   Открыть диалог
                 </button>
               )}
+              {i === 0 && <PprConnectionStatus token={token} />}
             </article>
           ))}
         </div>

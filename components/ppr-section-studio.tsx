@@ -3,6 +3,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { briefForAgent, isBriefApproved } from '@/lib/work-brief';
+import { confirmedExperience } from '@/lib/ppr-workspace';
 import { BookOpen, Check, Download, FilePenLine, LoaderCircle, Save, Search, Send, TriangleAlert } from 'lucide-react';
 import { draftableSectionIds, draftHtml, markDraftParagraphs, MAX_SOURCE_CHARACTERS, type PprDraft, type SavedPprDraft, type TemplatePreview } from '@/lib/ppr-drafts';
 import { buildPprSectionPlan, evaluatePprReadiness } from '@/lib/ppr-methodology';
@@ -147,6 +148,7 @@ export function PprSectionStudio({ task, project, token, cloud, sectionId, onTem
           {!!selected.length && <details className="studio-transfer"><summary>Посмотреть выбранные фрагменты целиком</summary>{selected.map(item => <p key={item.id}>{item.text}</p>)}</details>}
           <details className="studio-transfer"><summary>Какие сведения проекта будут переданы</summary><p>{task.description}</p><dl>{Object.entries({ Объект: project.objectName, Адрес: project.objectAddress, Заказчик: project.customer, Ответственный: project.responsible, 'Вид работ': project.workType, Режим: project.developmentMode === 'with_tk' ? 'С ТК' : project.developmentMode === 'without_tk' ? 'Без ТК' : 'Не выбран', Графики: project.scheduleSource, Высота: project.brief?.risks.height === 'unknown' ? 'Уточнить' : project.hasWorkAtHeight ? 'Да' : 'Нет', 'Подъёмные сооружения': project.brief?.risks.lifting === 'unknown' ? 'Уточнить' : project.hasLiftingStructures ? 'Да' : 'Нет', 'Башенный кран': project.usesTowerCrane ? 'Да' : 'Нет', Монолит: project.hasMonolithicWork ? 'Да' : 'Нет' }).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value || 'Не указано'}</dd></div>)}</dl></details>
           <details className="studio-transfer"><summary>Дополнительные вводные ТЗ и подписанты</summary><pre>{JSON.stringify(briefForAgent(project), null, 2)}</pre></details>
+          <details className="studio-transfer"><summary>Подтверждённые примеры правок проекта</summary><pre>{JSON.stringify(confirmedExperience(task.pprWorkspace), null, 2)}</pre></details>
           {dirty && <div className="studio-hint">Сначала сохраните ТЗ с выбранным шаблоном. <button onClick={onSaveProject} disabled={projectSaving || !!busy}>{projectSaving ? 'Сохраняем…' : 'Сохранить ТЗ'}</button></div>}
           {!approved && <p className="studio-key-note">До создания раздела утвердите актуальную редакцию ТЗ в форме выше. Сохранённые черновики доступны для просмотра.</p>}
           {!evaluatePprReadiness(project).ready && <p className="studio-hint">Для генерации нужны наименование объекта, вид работ и режим с ТК / без ТК.</p>}

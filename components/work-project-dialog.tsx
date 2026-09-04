@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Bot, Send, LoaderCircle } from 'lucide-react';
 import { workApi } from '@/lib/work-client';
 import { briefForAgent } from '@/lib/work-brief';
+import { confirmedExperience } from '@/lib/ppr-workspace';
 import type { Task, WorkProject } from '@/lib/tasks';
 import type { PprDeveloperResult } from '@/lib/ppr-agent-types';
 
@@ -167,8 +168,8 @@ export function WorkProjectDialog({
           <summary>Какие данные отправятся в OpenAI</summary>
           <p>
             Описание этой задачи, паспорт, ТЗ, названия реестра, ваш вопрос и
-            последние четыре обмена сообщениями. Файлы и рабочая папка не
-            передаются.
+            последние четыре обмена сообщениями и подтверждённые примеры правок
+            этого проекта. Файлы целиком и рабочая папка не передаются.
           </p>
           <pre>
             {JSON.stringify(
@@ -182,6 +183,9 @@ export function WorkProjectDialog({
                   workType: project.workType,
                 },
                 brief: briefForAgent(project),
+                confirmedProjectExamples: confirmedExperience(
+                  task.pprWorkspace,
+                ),
                 documents: project.documents.map((d) => d.name),
               },
               null,

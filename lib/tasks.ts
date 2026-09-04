@@ -1,4 +1,5 @@
 import { hydratePprDrafts, type SavedPprDraft } from './ppr-drafts';
+import { readPprWorkspace, type PprWorkspace } from './ppr-workspace';
 import { readWorkBrief, readBriefApprovals, readTkAssignments, type WorkBrief, type BriefApproval, type TkAssignment } from './work-brief';
 
 export const statuses = {
@@ -66,6 +67,7 @@ export type WorkProject = {
   documents: WorkDocument[]; checklist: WorkChecklistItem[];
 };
 export type Task = {
+  pprWorkspace?: PprWorkspace;
   briefApprovals?: BriefApproval[]; tkAssignments?: TkAssignment[];
   id: string; title: string; description: string; sphere: string; directionId?: string; subcategory: string;
   dueDate: string | null; dueTime?: string | null; durationMinutes?: number; waitingFor?: string;
@@ -144,6 +146,7 @@ export function defaultWorkChecklist(): WorkChecklistItem[] {
 export function hydrateTask(task: Task): Task {
   const status = normalizeStatus(task.status);
   const pprDrafts = hydratePprDrafts(task.pprDrafts);
+  task = { ...task, pprWorkspace: readPprWorkspace(task.pprWorkspace) };
   const briefApprovals = readBriefApprovals(task.briefApprovals);
   const tkAssignments = readTkAssignments(task.tkAssignments, briefApprovals);
   if (pprDrafts.some(draft => draft.taskId !== task.id)) throw new TaskError('Версия ППР относится к другому проекту.', 409);

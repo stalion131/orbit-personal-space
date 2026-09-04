@@ -8,7 +8,7 @@ export type PprDraft = {
   template: TemplateReference; sources: TemplateChunk[];
   paragraphs: { text: string; changed: boolean }[]; questions: string[]; warnings: string[];
 };
-export type SavedPprDraft = PprDraft & { version: number; createdAt: string };
+export type SavedPprDraft = PprDraft & { version: number; createdAt: string; briefId?: string };
 export const DRAFT_REVIEW_WARNING = 'Черновик требует инженерной проверки и проверки специалистом по НТД. Не использовать для производства работ без согласования.';
 export const MAX_SOURCE_CHARACTERS = 12000;
 
@@ -62,7 +62,8 @@ export function hydratePprDrafts(value: unknown): SavedPprDraft[] {
   return value.map(item => {
     const draft = parsePprDraft(item);
     if (!record(item) || !Number.isSafeInteger(item.version) || Number(item.version) < 1 || typeof item.createdAt !== 'string' || Number.isNaN(Date.parse(item.createdAt))) throw new Error('Некорректная сохранённая версия ППР.');
-    return { ...draft, version: Number(item.version), createdAt: item.createdAt };
+    if (item.briefId !== undefined && !validDraftId(item.briefId)) throw new Error('Некорректная редакция ТЗ черновика.');
+    return { ...draft, version: Number(item.version), createdAt: item.createdAt, ...(item.briefId ? { briefId: item.briefId as string } : {}) };
   });
 }
 
