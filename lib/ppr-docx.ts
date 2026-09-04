@@ -1,12 +1,9 @@
 import { createHash } from 'node:crypto';
-import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
-import {
-  DOMParser,
-  XMLSerializer,
-  type Element,
-  type Document,
-} from '@xmldom/xmldom';
+import { zipSync, strFromU8, strToU8 } from 'fflate';
+import { XMLSerializer, type Element, type Document } from '@xmldom/xmldom';
 import type { TextBlock, TextChange } from './ppr-workspace';
+import { officePackage, officeXml as xml } from './office-package.ts';
+import { inspectXlsx } from './ppr-xlsx.ts';
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 export const MAX_FILE_BYTES = 2_500_000;
@@ -27,25 +24,16 @@ export function decodeFile(value: unknown): {
     file.name.length > 200 ||
     /[\\/]/.test(file.name) ||
     Array.from(file.name).some((c) => c.charCodeAt(0) < 32) ||
-    !/\.(docx|pdf|txt)$/i.test(file.name) ||
+    !/\.(docx|xlsx|pdf|txt)$/i.test(file.name) ||
     typeof file.base64 !== 'string' ||
     file.base64.length > 3_333_336 ||
     !/^[A-Za-z0-9+/]+={0,2}$/.test(file.base64)
   )
-    fail('Выберите DOCX, PDF или TXT размером до 2,5 МБ.');
+    fail('Выберите DOCX, XLSX, PDF или TXT размером до 2,5 МБ.');
   const bytes = Buffer.from(file.base64 as string, 'base64');
   if (!bytes.length || bytes.length > MAX_FILE_BYTES)
     fail('Размер файла превышает 2,5 МБ. Разделите исходные данные на части.');
   return { name: file.name as string, bytes };
-}
-function xml(text: string): Document {
-  if (/<!DOCTYPE|<!ENTITY/i.test(text))
-    fail('DTD и XML-сущности в документе запрещены.');
-  return new DOMParser({
-    onError: () => {
-      throw new Error('Некорректная структура XML.');
-    },
-  }).parseFromString(text, 'application/xml');
 }
 const elements = (el: Element | Document, name: string) =>
   Array.from(el.getElementsByTagNameNS(W, name));
@@ -54,53 +42,9 @@ const content = (el: Element) =>
     .map((t) => t.textContent || '')
     .join('');
 function readPackage(bytes: Uint8Array) {
-  let count = 0,
-    size = 0;
-  let entries: Record<string, Uint8Array>;
-  try {
-    entries = unzipSync(bytes, {
-      filter: (entry) => {
-        if (
-          ++count > 1500 ||
-          (size += entry.originalSize) > 60_000_000 ||
-          entry.originalSize > 12_000_000 ||
-          /(^\/|\\|(^|\/)\.\.($|\/))/.test(entry.name)
-        )
-          fail('Небезопасный или слишком большой архив DOCX.');
-        if (/vbaProject|activeX|embeddings\//i.test(entry.name))
-          fail(
-            'Макросы и встроенные объекты не поддерживаются. Сохраните безопасную копию DOCX.',
-          );
-        return true;
-      },
-    });
-  } catch {
-    return fail(
-      'DOCX повреждён, защищён паролем или содержит неподдерживаемые объекты.',
-    );
-  }
+  const entries = officePackage(bytes, 'DOCX');
   if (!entries['word/document.xml'] || !entries['[Content_Types].xml'])
     fail('Файл не является DOCX.');
-  for (const [name, bytes] of Object.entries(entries)) {
-    if (name.endsWith('.xml') || name.endsWith('.rels')) {
-      const document = xml(strFromU8(bytes));
-      if (name.endsWith('.rels'))
-        for (const relation of Array.from(
-          document.getElementsByTagName('Relationship'),
-        )) {
-          if (
-            relation.getAttribute('TargetMode') === 'External' &&
-            !(
-              relation.getAttribute('Type')?.endsWith('/hyperlink') &&
-              /^https?:\/\//i.test(relation.getAttribute('Target') || '')
-            )
-          )
-            fail(
-              'Внешние связи с файлами в DOCX запрещены. Разорвите связи в Word.',
-            );
-        }
-    }
-  }
   const document = xml(strFromU8(entries['word/document.xml']));
   const body = elements(document, 'body')[0];
   if (!body) fail('В DOCX нет основного текста.');
@@ -149,8 +93,12 @@ export async function extractFile(
   maximumText = MAX_TEXT,
 ) {
   let blocks: TextBlock[];
+  let warnings: string[] = [];
+  let sheets: { name: string; cells: number; hidden: boolean }[] = [];
   if (/\.docx$/i.test(file.name)) blocks = inspectDocx(file.bytes).blocks;
-  else if (/\.pdf$/i.test(file.name)) {
+  else if (/\.xlsx$/i.test(file.name)) {
+    ({ blocks, warnings, sheets } = inspectXlsx(file.bytes));
+  } else if (/\.pdf$/i.test(file.name)) {
     const { getDocumentProxy, extractText } = await import('unpdf');
     const document = await getDocumentProxy(new Uint8Array(file.bytes), {
       useSystemFonts: false,
@@ -196,6 +144,8 @@ export async function extractFile(
     size: file.bytes.length,
     characters,
     blocks,
+    warnings,
+    sheets,
   };
 }
 

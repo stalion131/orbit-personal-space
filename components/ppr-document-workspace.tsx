@@ -21,7 +21,12 @@ import { buildPprSectionPlan } from '@/lib/ppr-methodology';
 import { draftableSectionIds } from '@/lib/ppr-drafts';
 import { workApi } from '@/lib/work-client';
 import { PprSourcePicker } from '@/components/ppr-source-picker';
-import { sourceBatchIssue } from '@/lib/work-sources';
+import {
+  sourceBatchIssue,
+  sourcePurposes,
+  SOURCE_BATCH_TEXT,
+  type SourcePurpose,
+} from '@/lib/work-sources';
 import {
   cacheWorkFile,
   cachedWorkFile,
@@ -31,7 +36,14 @@ import {
 } from '@/lib/work-file-cache';
 
 type Inspection = {
-  file: { hash: string; name: string; characters: number; blocks: TextBlock[] };
+  file: {
+    hash: string;
+    name: string;
+    characters: number;
+    blocks: TextBlock[];
+    warnings: string[];
+    sheets: { name: string; cells: number; hidden: boolean }[];
+  };
   paragraphs: {
     id: string;
     text: string;
@@ -65,6 +77,7 @@ export function PprDocumentWorkspace({
   const [connected, setConnected] = useState(false);
   const [sources, setSources] = useState<File[]>([]),
     [previews, setPreviews] = useState<Inspection[]>([]);
+  const [purposes, setPurposes] = useState<Record<string, SourcePurpose>>({});
   const [base, setBase] = useState<File | null>(null),
     [inspection, setInspection] = useState<Inspection | null>(null);
   const [corrected, setCorrected] = useState<File | null>(null),
@@ -118,7 +131,7 @@ export function PprDocumentWorkspace({
   useEffect(() => {
     setConsent(false);
     setAssemblyConsent(false);
-  }, [task.revision, sources, base, blocks, sectionId, draftId, tab]);
+  }, [task.revision, sources, purposes, base, blocks, sectionId, draftId, tab]);
   useEffect(() => {
     setFields(
       (analysis?.proposals || [])
@@ -275,9 +288,9 @@ export function PprDocumentWorkspace({
           <div className="ppr-flow-panel">
             <h4>Прочитать файлы и предложить заполнение ТЗ</h4>
             <p>
-              До 4 DOCX, PDF или TXT; общий пакет до 2,8 МБ и 100 000 знаков.
-              Сканам нужно предварительное OCR. Нажмите «Прочитать», чтобы
-              увидеть текст до отправки ИИ.
+              До 8 DOCX, XLSX, PDF или TXT; общий пакет до 2,8 МБ и 300 000
+              знаков. Сканам нужно предварительное OCR. Нажмите «Прочитать»,
+              чтобы увидеть текст до отправки ИИ.
             </p>
             <PprSourcePicker
               key={`${task.id}:${brief.workingFolder}`}
@@ -310,26 +323,84 @@ export function PprDocumentWorkspace({
                     await remember(file, value.file.hash);
                   }
                   setPreviews(values);
+                  setNotice(
+                    `Прочитано файлов: ${values.length}. Поля ТЗ не изменены. Укажите назначение договоров перед разбором.`,
+                  );
                 })
               }
             >
               Прочитать файлы
             </button>
+            {previews.length > 0 && (
+              <p className="muted">
+                Прочитано{' '}
+                {previews
+                  .reduce((sum, p) => sum + p.file.characters, 0)
+                  .toLocaleString('ru')}{' '}
+                знаков. Чем больше текст, тем больше объём оплачиваемого вызова
+                ИИ. В Excel используются сохранённые значения без пересчёта
+                формул.
+              </p>
+            )}
+            {previews.reduce((sum, p) => sum + p.file.characters, 0) >
+              SOURCE_BATCH_TEXT && (
+              <p role="alert">
+                Пакет превышает 300 000 знаков. Выберите меньше файлов; текст не
+                будет обрезан.
+              </p>
+            )}
             {previews.map((p) => (
-              <details key={p.file.hash}>
-                <summary>
-                  {p.file.name} · {p.file.characters.toLocaleString('ru')}{' '}
-                  знаков
-                </summary>
-                <div className="ppr-source-preview">
-                  {p.file.blocks.map((b) => (
-                    <p key={b.id}>
-                      <small>{b.id}</small>
-                      {b.text}
+              <div key={p.file.hash} className="ppr-source-entry">
+                <label>
+                  Назначение: {p.file.name}
+                  <select
+                    aria-label={`Назначение ${p.file.name}`}
+                    value={purposes[p.file.hash] || 'unspecified'}
+                    onChange={(e) =>
+                      setPurposes({
+                        ...purposes,
+                        [p.file.hash]: e.target.value as SourcePurpose,
+                      })
+                    }
+                  >
+                    {Object.entries(sourcePurposes).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <details>
+                  <summary>
+                    {p.file.name} · {p.file.characters.toLocaleString('ru')}{' '}
+                    знаков
+                  </summary>
+                  {p.file.sheets?.length > 0 && (
+                    <p>
+                      Листы:{' '}
+                      {p.file.sheets
+                        .map(
+                          (s) =>
+                            `${s.name} (${s.cells} ячеек${s.hidden ? ', скрыт' : ''})`,
+                        )
+                        .join(' · ')}
+                    </p>
+                  )}
+                  {p.file.warnings?.map((w) => (
+                    <p key={w} className="muted">
+                      {w}
                     </p>
                   ))}
-                </div>
-              </details>
+                  <div className="ppr-source-preview">
+                    {p.file.blocks.map((b) => (
+                      <p key={b.id}>
+                        <small>{b.id}</small>
+                        {b.text}
+                      </p>
+                    ))}
+                  </div>
+                </details>
+              </div>
             ))}
             {consentControl}
             <button
@@ -338,13 +409,19 @@ export function PprDocumentWorkspace({
                 !consent ||
                 configured !== true ||
                 previews.length !== sources.length ||
+                previews.reduce((sum, p) => sum + p.file.characters, 0) >
+                  SOURCE_BATCH_TEXT ||
                 !sources.length
               }
               onClick={() =>
                 void run(async () => {
                   const files = [];
-                  for (const source of sources)
-                    files.push(await wireFile(source));
+                  for (const [index, source] of sources.entries())
+                    files.push({
+                      ...(await wireFile(source)),
+                      purpose:
+                        purposes[previews[index].file.hash] || 'unspecified',
+                    });
                   accept(
                     await post({
                       op: 'analyze',

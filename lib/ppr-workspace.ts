@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { WorkProject } from './tasks';
 import type { WorkBrief } from './work-brief';
+import type { SourcePurpose } from './work-sources';
 
 export const PPR_MODEL = 'gpt-5.6-sol';
 export const fieldLabels = {
@@ -53,6 +54,7 @@ export type FileInfo = {
   name: string;
   size: number;
   characters: number;
+  purpose?: SourcePurpose;
 };
 export type BriefAnalysis = {
   id: string;
@@ -117,9 +119,18 @@ export function readPprWorkspace(value: unknown): PprWorkspace {
                   name: text.max(200),
                   size: z.number().int().positive(),
                   characters: z.number().int().nonnegative(),
+                  purpose: z
+                    .enum([
+                      'unspecified',
+                      'construction_contract',
+                      'ppr_contract',
+                      'quantities',
+                      'other',
+                    ])
+                    .optional(),
                 }),
               )
-              .max(4),
+              .max(8),
             proposals: z
               .array(
                 proposalSchema.extend({
@@ -221,11 +232,18 @@ export function applyProposals(
 
 export function verifiedProposals(
   proposals: FieldProposal[],
-  files: { hash: string; blocks: TextBlock[] }[],
+  files: { hash: string; blocks: TextBlock[]; purpose?: SourcePurpose }[],
 ) {
   const seen = new Set<string>();
   return proposals
     .filter((p) => {
+      const file = files.find((f) => f.hash === p.fileHash);
+      // A developer's contract is not evidence for construction-party signatories.
+      if (
+        file?.purpose === 'ppr_contract' &&
+        /^brief\.(customer|contractor)\./.test(p.field)
+      )
+        return false;
       const source = files
         .find((f) => f.hash === p.fileHash)
         ?.blocks.find((b) => b.id === p.blockId);

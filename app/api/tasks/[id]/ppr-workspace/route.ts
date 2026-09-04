@@ -25,6 +25,12 @@ import {
   checkSolConnection,
 } from '@/lib/ppr-developer-agent';
 import { draftableSectionIds, type DraftableSectionId } from '@/lib/ppr-drafts';
+import {
+  SOURCE_BATCH_COUNT,
+  SOURCE_BATCH_TEXT,
+  sourceBatchIssue,
+  readSourcePurpose,
+} from '@/lib/work-sources';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -178,18 +184,34 @@ export async function POST(
       if (
         !Array.isArray(data.files) ||
         !data.files.length ||
-        data.files.length > 4
-      )
-        throw new TaskError('Выберите от 1 до 4 исходных файлов.');
-      const files = [];
-      for (const value of data.files)
-        files.push(await extractFile(decodeFile(value)));
-      if (
-        new Set(files.map((f) => f.hash)).size !== files.length ||
-        files.reduce((n, f) => n + f.characters, 0) > 100000
+        data.files.length > SOURCE_BATCH_COUNT
       )
         throw new TaskError(
-          'Уберите повторные файлы или сократите пакет до 100 000 знаков.',
+          `Выберите от 1 до ${SOURCE_BATCH_COUNT} исходных файлов.`,
+        );
+      const files = [];
+      const decoded = data.files.map((value) => ({
+        ...decodeFile(value),
+        purpose: readSourcePurpose((value as { purpose?: unknown })?.purpose),
+      }));
+      const issue = sourceBatchIssue(
+        decoded.map((f) => ({ name: f.name, size: f.bytes.length })),
+      );
+      if (issue) throw new TaskError(issue);
+      for (const value of decoded)
+        files.push({
+          ...(await extractFile(
+            value,
+            /\.pdf$/i.test(value.name) ? 100000 : SOURCE_BATCH_TEXT,
+          )),
+          purpose: value.purpose,
+        });
+      if (
+        new Set(files.map((f) => f.hash)).size !== files.length ||
+        files.reduce((n, f) => n + f.characters, 0) > SOURCE_BATCH_TEXT
+      )
+        throw new TaskError(
+          'Уберите повторные файлы или сократите пакет до 300 000 знаков.',
         );
       const output = await extractPprBrief(
         task.workProject,
@@ -221,20 +243,24 @@ export async function POST(
         at: now,
         revision: task.revision + 1,
         model: PPR_MODEL,
-        files: files.map(({ hash, name, size, characters }) => ({
+        files: files.map(({ hash, name, size, characters, purpose }) => ({
           hash,
           name,
           size,
           characters,
+          purpose,
         })),
         proposals,
         questions: output.questions.map((s) => s.slice(0, 500)).slice(0, 15),
         warnings: [
           ...(proposals.length !== output.proposals.length
             ? [
-                'Предложения без проверяемой цитаты или с неверным значением исключены.',
+                'Исключены предложения без проверяемой цитаты, с неверным значением или подменой строительных сторон из договора на разработку ППР.',
               ]
             : []),
+          ...files.flatMap((f) =>
+            f.warnings.map((w) => `${f.name}: ${w}`.slice(0, 500)),
+          ),
           ...output.warnings.map((s) => s.slice(0, 500)),
         ].slice(0, 15),
         applied: [],

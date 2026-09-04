@@ -129,7 +129,7 @@ export function PprSourcePicker({
     setNotice(
       isFolder
         ? 'Список получен. Содержимое не отправлено. Отметьте нужные файлы.'
-        : 'Отметьте до 4 файлов для одного разбора.',
+        : 'Отметьте до 8 файлов для одного разбора.',
     );
   };
   const toggle = (file: File) => {
@@ -240,7 +240,7 @@ export function PprSourcePicker({
             aria-label="Выбрать отдельные исходные файлы"
             type="file"
             multiple
-            accept=".docx,.pdf,.txt"
+            accept=".docx,.xlsx,.pdf,.txt"
             onChange={(e) => {
               choose(e.target.files, false);
               e.target.value = '';
@@ -404,7 +404,7 @@ export function PprSourcePicker({
       {notice && <output className="ppr-warning">{notice}</output>}
       <div className="ppr-source-selection" aria-live="polite">
         <strong>
-          Для разбора: {sources.length} из 4 ·{' '}
+          Для разбора: {sources.length} из 8 ·{' '}
           {sizeLabel(sources.reduce((n, f) => n + f.size, 0))}
         </strong>
         {sources.map((file, index) => (
