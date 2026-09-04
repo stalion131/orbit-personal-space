@@ -175,6 +175,30 @@ try {
   const afterTk = (await api('/api/tasks')).tasks.find(v => v.id === task.id);
   assert.deepEqual(afterTk.tkAssignments, task.tkAssignments);
   task = await workspaceSmoke({ api, task, setOutput: value => { workspaceOutput = value; }, modelRequests });
+  // Full manual brief survives a separate read; a stale tab cannot replace it.
+  let persistenceTask = (await create('Проверка сохранения полного ТЗ')).task;
+  const fullProject = { ...project, objectAddress: 'Учебный адрес', developmentMode: 'with_tk',
+    brief: { ...task.workProject.brief, code: 'ППР-СОХРАНЕНИЕ-1', title: 'Полное учебное ТЗ',
+      methods: 'Монтаж последовательно по захваткам', people: 12, equipment: 'Учебный перечень техники',
+      siteInstructions: 'Учебные проезды и ограждения', contractorInput: 'Работа в две смены',
+      additional: 'Согласовать доступ', crew: 'Два звена', scheduleNotes: 'Учебный график',
+      schedules: ['Производство работ', 'Движение техники'], tkList: ['ТК монтаж', 'ТК земляные работы'],
+      contractor: { organization: 'Учебный подрядчик', position: 'Директор', fullName: 'Иванов Иван Иванович', authority: 'Устав' },
+      customer: { organization: 'Учебный заказчик', position: '', fullName: '', authority: '' },
+      risks: { height: 'no', lifting: 'no', fire: 'yes', electrical: 'yes', confined: 'unknown' },
+    } };
+  const oldRevision = persistenceTask.revision;
+  ({ task: persistenceTask } = await api(`/api/tasks/${persistenceTask.id}`, { method: 'PATCH', data: {
+    op: 'edit_work_project', revision: oldRevision, project: fullProject,
+  } }));
+  assert.deepEqual(persistenceTask.workProject.brief, fullProject.brief);
+  const readPersisted = async () => (await api('/api/tasks')).tasks.find(t => t.id === persistenceTask.id);
+  assert.deepEqual((await readPersisted()).workProject, persistenceTask.workProject);
+  await api(`/api/tasks/${persistenceTask.id}`, { method: 'PATCH', status: 409, data: {
+    op: 'edit_work_project', revision: oldRevision, project,
+  } });
+  assert.deepEqual((await readPersisted()).workProject, persistenceTask.workProject);
+  console.log('PASS: all manual brief fields survive save/read; stale-tab overwrite is rejected.');
   failModel = true;
   const providerFailure = await generate(input(), 502);
   assert.ok(!JSON.stringify(providerFailure).includes('PRIVATE_PROVIDER_ERROR_MARKER'));

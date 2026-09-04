@@ -684,6 +684,20 @@ export function WorkBriefForm({
               предложит заполнение; выбранные поля применяются только после
               проверки.
             </div>
+            <button
+              className="quiet-btn"
+              onClick={() =>
+                downloadJson(`TZ-draft-${task.id}.json`, {
+                  schema: 'orbit-work-brief-draft-v1',
+                  taskId: task.id,
+                  taskTitle: task.title,
+                  exportedAt: new Date().toISOString(),
+                  project: p,
+                })
+              }
+            >
+              Скачать копию ТЗ
+            </button>
             <button className="quiet-btn" onClick={onLibrary}>
               <FolderOpen />
               Исходные материалы

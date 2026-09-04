@@ -186,6 +186,16 @@ function ProjectWorkspace({
     onSaved(t);
   };
   useEffect(() => {
+    // A refresh must update a clean form, but must never discard local edits.
+    if (revision === task.revision || changed || busy || studioBusy) return;
+    const latest = initialProject(task);
+    setProject(latest);
+    setBaseline(latest);
+    setRevision(task.revision);
+    setError('');
+    setNotice('Загружена сохранённая версия ТЗ.');
+  }, [task, revision, changed, busy, studioBusy]);
+  useEffect(() => {
     onDirty(changed || busy || studioBusy);
     return () => onDirty(false);
   }, [changed, busy, studioBusy]);
@@ -224,7 +234,9 @@ function ProjectWorkspace({
         },
       );
       accept(data.task);
-      setNotice('ТЗ и данные проекта сохранены.');
+      setNotice(
+        `ТЗ проекта «${data.task.title}» сохранено${cloud ? ' в облаке' : ' во временной локальной базе'}. Редакция ${data.task.revision}.`,
+      );
     } catch (e) {
       setError(
         e instanceof Error ? e.message : 'Не удалось сохранить изменения.',
@@ -369,6 +381,19 @@ function ProjectWorkspace({
       {conflict && (
         <div className="form-error">
           Проект обновлён в другом окне. Ваши правки остались в форме.{' '}
+          <button
+            onClick={() =>
+              downloadJson(`TZ-unsaved-${task.id}.json`, {
+                schema: 'orbit-work-brief-draft-v1',
+                taskId: task.id,
+                taskTitle: task.title,
+                exportedAt: new Date().toISOString(),
+                project,
+              })
+            }
+          >
+            Скачать мои правки
+          </button>{' '}
           <button
             onClick={() => {
               if (
