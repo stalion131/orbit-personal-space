@@ -1,3 +1,5 @@
+import { hydratePprDrafts, type SavedPprDraft } from './ppr-drafts';
+
 export const statuses = {
   active: 'Активная', waiting: 'Ожидает действия со стороны', paused: 'Приостановлена',
   someday: 'До ситуации', completed: 'Завершена',
@@ -65,7 +67,7 @@ export type Task = {
   id: string; title: string; description: string; sphere: string; directionId?: string; subcategory: string;
   dueDate: string | null; dueTime?: string | null; durationMinutes?: number; waitingFor?: string;
   queue: number; priority: Priority; focus: boolean; status: Status; demo: boolean; revision: number;
-  createdAt: string; updatedAt: string; events: TaskEvent[]; subtasks: Subtask[]; workProject?: WorkProject; result?: string; proposal?: Proposal;
+  createdAt: string; updatedAt: string; events: TaskEvent[]; subtasks: Subtask[]; workProject?: WorkProject; pprDrafts?: SavedPprDraft[]; result?: string; proposal?: Proposal;
 };
 export type Operation =
   | { op: 'complete' }
@@ -136,9 +138,11 @@ export function defaultWorkChecklist(): WorkChecklistItem[] {
 }
 export function hydrateTask(task: Task): Task {
   const status = normalizeStatus(task.status);
+  const pprDrafts = hydratePprDrafts(task.pprDrafts);
+  if (pprDrafts.some(draft => draft.taskId !== task.id)) throw new TaskError('Версия ППР относится к другому проекту.', 409);
   return { ...task, directionId: task.directionId || legacyDirectionId(task.sphere, task.subcategory), dueTime: task.dueTime ?? null,
     durationMinutes: validDuration(task.durationMinutes) ? task.durationMinutes : 60, waitingFor: typeof task.waitingFor === 'string' ? task.waitingFor : '',
-    focus: Boolean(task.focus), status, subtasks: hydrateSubtasks(task.subtasks), workProject: hydrateWorkProject(task.workProject) };
+    focus: Boolean(task.focus), status, subtasks: hydrateSubtasks(task.subtasks), workProject: hydrateWorkProject(task.workProject), pprDrafts };
 }
 export function orderedCatalog(catalog: Catalog): Catalog { return { ...catalog, spheres: [...catalog.spheres].sort((a, b) => a.order - b.order), directions: [...catalog.directions].sort((a, b) => a.order - b.order) }; }
 export function normalizeCatalog(candidate: unknown): Catalog {

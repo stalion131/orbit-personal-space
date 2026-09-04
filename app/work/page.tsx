@@ -34,11 +34,14 @@ import {
   X,
 } from 'lucide-react';
 import { LoginScreen } from '@/components/login-screen';
+import { DraftText, PprSectionStudio } from '@/components/ppr-section-studio';
+import { draftableSectionIds } from '@/lib/ppr-drafts';
 import type { PprDeveloperResult } from '@/lib/ppr-agent-types';
 import { buildPprSectionPlan, evaluatePprReadiness, pprModeLabels, pprScheduleLabels } from '@/lib/ppr-methodology';
 import { defaultCatalog, defaultWorkChecklist, statuses, type Catalog, type PprDevelopmentMode, type PprScheduleSource, type Task, type WorkDocumentCategory, type WorkDocumentStatus, type WorkProject, type WorkProjectStage } from '@/lib/tasks';
 import { useOrbitSession } from '@/lib/use-orbit-session';
 import './workspace.css';
+import './ppr-studio.css';
 
 type DocumentKind = 'ppr' | 'tk';
 type LocalFileItem = { name: string; path: string; kind: 'directory' | 'file'; extension: string; size: number | null; modifiedAt: string };
@@ -143,6 +146,7 @@ export default function WorkWorkspace() {
   const [pprAgentConsent, setPprAgentConsent] = useState(false);
   const [pprAgentRunning, setPprAgentRunning] = useState(false);
   const [pprAgentResult, setPprAgentResult] = useState<PprDeveloperResult | null>(null);
+  const [selectedSectionIndex, setSelectedSectionIndex] = useState(0);
 
   const load = async () => {
     if (access.loading || (access.mode === 'supabase' && !access.accessToken)) return;
@@ -206,8 +210,13 @@ export default function WorkWorkspace() {
   const pprSectionPlan = projectDraft ? buildPprSectionPlan(projectDraft) : [];
   const pprReadiness = projectDraft ? evaluatePprReadiness(projectDraft) : null;
   const sections = kind === 'ppr' && pprSectionPlan.length ? pprSectionPlan.map(section => section.title) : documentSections[kind];
+  const sectionIndex = Math.min(selectedSectionIndex, sections.length - 1);
+  const activePlan = kind === 'ppr' ? pprSectionPlan[sectionIndex] : null;
+  const activeDraft = selected?.pprDrafts?.filter(item => item.sectionId === activePlan?.id).at(-1);
   const checklistDone = projectDraft?.checklist.filter(item => item.completed).length || 0;
   const librarySegments = (library.path || '').split('/').filter(Boolean);
+
+  useEffect(() => { setSelectedSectionIndex(0); }, [selected?.id, kind]);
 
   useEffect(() => {
     if (selected) { const project = initialProject(selected); setProjectDraft(project); setKind(project.documentType); }
@@ -321,7 +330,7 @@ export default function WorkWorkspace() {
                 <label><span>Режим разработки</span><select value={projectDraft.developmentMode} onChange={event => setProjectDraft({ ...projectDraft, developmentMode: event.target.value as PprDevelopmentMode })}>{Object.entries(pprModeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
                 <label><span>Основной вид работ</span><input value={projectDraft.workType} maxLength={300} onChange={event => setProjectDraft({ ...projectDraft, workType: event.target.value })} placeholder="Например: монолитные работы" /></label>
                 <label><span>Источник графиков</span><select value={projectDraft.scheduleSource} onChange={event => setProjectDraft({ ...projectDraft, scheduleSource: event.target.value as PprScheduleSource })}>{Object.entries(pprScheduleLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-                <label className="ppr-template-field"><span>Базовый шаблон</span><input value={projectDraft.baseTemplatePath} maxLength={1000} onChange={event => setProjectDraft({ ...projectDraft, baseTemplatePath: event.target.value })} placeholder="Название или путь к выбранному шаблону" /></label>
+                <label className="ppr-template-field"><span>Базовый шаблон · выберите ниже в блоке «Черновик одного раздела»</span><input value={projectDraft.baseTemplatePath} readOnly placeholder="Шаблон пока не выбран" onClick={() => document.getElementById('ppr-section-studio')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} /></label>
                 <div className="ppr-condition-grid">
                   <label><input type="checkbox" checked={projectDraft.hasWorkAtHeight} onChange={event => setProjectDraft({ ...projectDraft, hasWorkAtHeight: event.target.checked })} /><span>Работы на высоте</span></label>
                   <label><input type="checkbox" checked={projectDraft.hasLiftingStructures} onChange={event => setProjectDraft({ ...projectDraft, hasLiftingStructures: event.target.checked, usesTowerCrane: event.target.checked ? projectDraft.usesTowerCrane : false })} /><span>Подъёмные сооружения</span></label>
@@ -345,22 +354,21 @@ export default function WorkWorkspace() {
           <div className="work-grid">
             <section className="work-panel structure-panel">
               <header><div><span>СТРУКТУРА</span><h2>{kind === 'ppr' ? 'Разделы ППР' : 'Разделы ТК'}</h2></div><ListChecks /></header>
-              <div className="section-list">{sections.map((section, index) => { const planItem = kind === 'ppr' ? pprSectionPlan[index] : null; return <button key={planItem?.id || section} className={index === 0 ? 'active' : ''} title={planItem?.note}><span>{index + 1}</span><b>{section}{planItem && <small>{planItem.treatment === 'manual' ? 'Вручную' : planItem.treatment === 'reference' ? 'Ссылка' : planItem.treatment === 'expand' ? 'Раскрыть' : planItem.treatment === 'conditional' ? 'По условию' : 'Постоянный'}</small>}</b><ChevronRight /></button>; })}</div>
+              <div className="section-list">{sections.map((section, index) => { const planItem = kind === 'ppr' ? pprSectionPlan[index] : null; return <button key={planItem?.id || section} className={index === sectionIndex ? 'active' : ''} title={planItem?.note} onClick={() => setSelectedSectionIndex(index)}><span>{index + 1}</span><b>{section.replace(/^\d+\.\s*/, '')}{planItem && <small>{planItem.treatment === 'manual' ? 'Вручную' : planItem.treatment === 'reference' ? 'Ссылка' : planItem.treatment === 'expand' ? 'Раскрыть' : planItem.treatment === 'conditional' ? 'По условию' : 'Постоянный'}</small>}</b><ChevronRight /></button>; })}</div>
               <div className="task-stages"><span>ЭТАПЫ ИЗ ЗАДАЧИ</span>{selected.subtasks?.length ? selected.subtasks.map(item => <div key={item.id} className={item.completed ? 'done' : ''}><i>{item.completed && <Check />}</i><span><b>{item.title}</b><small>{dateLabel(item.dueDate)}{item.dueTime ? `, ${item.dueTime}` : ''}</small></span></div>) : <p>Этапы ещё не добавлены.</p>}</div>
             </section>
 
             <section className="work-panel editor-panel">
-              <header><div><span>РАБОЧИЙ ДОКУМЕНТ</span><h2>{sections[0]}</h2></div><em>Черновик не создан</em></header>
+              <header><div><span>РАБОЧИЙ ДОКУМЕНТ</span><h2>{sections[sectionIndex]}</h2></div><em>{activeDraft ? `Черновик · версия ${activeDraft.version}` : 'Черновик не создан'}</em></header>
               <article className="document-sheet">
                 <div className="sheet-mark"><HardHat /></div>
                 <span>{kind === 'ppr' ? 'ППР' : 'ТК'}</span>
                 <h2>{selected.title}</h2>
                 <div className="sheet-rule" />
-                <h3>{sections[0]}</h3>
-                <p>{selected.description}</p>
-                <div className="sheet-placeholder"><Sparkles /><span><b>Здесь появится текст документа</b><small>После подключения шаблона и агента-разработчика.</small></span></div>
+                <h3>{sections[sectionIndex]}</h3>
+                {activeDraft ? <DraftText draft={activeDraft} /> : <><p>{selected.description}</p><div className="sheet-placeholder"><Sparkles /><span><b>Здесь появится текст документа</b><small>{activePlan?.note || 'Генерация ТК будет подключена отдельным этапом.'}</small></span></div></>}
               </article>
-              <footer><span>Содержимое задачи уже синхронизировано с Orbit.</span><button disabled><Sparkles />Сформировать раздел</button></footer>
+              <footer><span>{activeDraft ? 'Черновик требует инженерной проверки.' : 'Содержимое задачи синхронизировано с Orbit.'}</span><button disabled={kind !== 'ppr' || !draftableSectionIds.some(id => id === activePlan?.id)} onClick={() => document.getElementById('ppr-section-studio')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}><Sparkles />Работа с шаблоном</button></footer>
             </section>
 
             <aside className="work-side-column">
@@ -407,6 +415,8 @@ export default function WorkWorkspace() {
             </div>}
           </section>}
 
+          {projectDraft && kind === 'ppr' && <PprSectionStudio key={selected.id} task={selected} project={projectDraft} token={access.accessToken} cloud={access.mode === 'supabase'} sectionId={activePlan?.id || 'general'} onSection={id => setSelectedSectionIndex(Math.max(0, pprSectionPlan.findIndex(item => item.id === id)))} onTemplate={path => setProjectDraft({ ...projectDraft, baseTemplatePath: path })} onSaveProject={() => void saveProject()} projectSaving={projectSaving} onSaved={task => setTasks(current => current.map(item => item.id === task.id ? task : item))} />}
+
           <section className="local-library">
             <header><div><span><HardDrive /></span><div><small>ЛОКАЛЬНЫЕ МАТЕРИАЛЫ</small><h2>Библиотека шаблонов ППР и ТК</h2></div></div>{library.enabled && <em>Только на этом компьютере</em>}</header>
             {!libraryChecked || libraryLoading ? <div className="library-state"><LoaderCircle className="spin" />Читаем локальную папку…</div> : !library.enabled ? <div className="library-state"><HardDrive /><div><b>Локальная библиотека выключена</b><p>На сайте Vercel файлы с диска компьютера недоступны. Запустите локальную версию Orbit.</p></div></div> : <>
@@ -429,7 +439,7 @@ export default function WorkWorkspace() {
             </>}
           </section>
 
-          <section className="quality-bar"><div><FileCheck2 /><span><b>Контроль документа</b><small>Реестр и чек-лист сохраняются вместе с карточкой проекта.</small></span></div><dl><div><dt>Документы</dt><dd>{projectDraft?.documents.length || 0}</dd></div><div><dt>Чек-лист</dt><dd>{checklistDone} / {projectDraft?.checklist.length || 0}</dd></div><div><dt>Разделы</dt><dd>0 / {sections.length}</dd></div></dl><button disabled><Scale />Передать на проверку</button></section>
+          <section className="quality-bar"><div><FileCheck2 /><span><b>Контроль документа</b><small>Сохранённые черновики ещё не являются утверждёнными разделами.</small></span></div><dl><div><dt>Документы</dt><dd>{projectDraft?.documents.length || 0}</dd></div><div><dt>Чек-лист</dt><dd>{checklistDone} / {projectDraft?.checklist.length || 0}</dd></div><div><dt>Черновики разделов</dt><dd>{kind === 'ppr' ? new Set(selected.pprDrafts?.map(item => item.sectionId)).size : 0} / {sections.length}</dd></div></dl><button disabled><Scale />Передать на проверку</button></section>
         </>}
       </section>
     </div>
